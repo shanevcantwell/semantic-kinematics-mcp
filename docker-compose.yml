@@ -4,7 +4,7 @@ services:
       context: .
       args:
         VERSION: 0.2.0
-    image: semantic-kinematics-mcp:0.2.0
+    image: mcp/semantic-kinematics:0.2.0
     stdin_open: true
     tty: true
     environment:
