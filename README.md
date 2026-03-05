@@ -1,5 +1,3 @@
-# semantic-kinematics
-
 <img alt="semantic-kinematics-mcp" src="img/semantic-kinematics-banner.png" />
 Embedding space analysis toolkit. Measures semantic drift between texts, traces trajectory dynamics through prose, and exposes everything as MCP tools for agentic integration.
 
