@@ -11,8 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from semantic_chunker.mcp.commands.embeddings import calculate_drift
-from semantic_chunker.ui.state import state_manager, drift_session
+from semantic_kinematics.mcp.commands.embeddings import calculate_drift
+from semantic_kinematics.ui.state import state_manager, drift_session
 
 
 async def calculate_drift_single(

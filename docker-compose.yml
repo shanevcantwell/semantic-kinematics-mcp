@@ -1,10 +1,10 @@
 services:
-  semantic-chunker-mcp:
+  semantic-kinematics-mcp:
     build:
       context: .
       args:
         VERSION: 0.1.0
-    image: semantic-chunker-mcp:0.1.0
+    image: semantic-kinematics-mcp:0.1.0
     stdin_open: true
     tty: true
     volumes:

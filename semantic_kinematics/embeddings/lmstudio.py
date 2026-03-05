@@ -8,7 +8,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from semantic_chunker.embeddings.base import EmbeddingAdapter
+from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
 
 class LMStudioAdapter(EmbeddingAdapter):

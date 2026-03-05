@@ -1,9 +1,9 @@
 """
-Main Gradio application for semantic-chunker tools.
+Main Gradio application for semantic-kinematics tools.
 
 Usage:
-    python -m semantic_chunker
-    semantic-chunker-ui
+    python -m semantic_kinematics
+    semantic-kinematics-ui
 """
 
 from dotenv import load_dotenv
@@ -11,17 +11,17 @@ load_dotenv()
 
 import gradio as gr
 
-from semantic_chunker.ui.tabs.drift import ui as drift_ui
-from semantic_chunker.ui.tabs.trajectory import ui as trajectory_ui
+from semantic_kinematics.ui.tabs.drift import ui as drift_ui
+from semantic_kinematics.ui.tabs.trajectory import ui as trajectory_ui
 
 
 def create_app() -> gr.Blocks:
     with gr.Blocks(
-        title="Semantic Chunker",
+        title="Semantic Kinematics",
         theme=gr.themes.Soft(),
     ) as app:
         gr.Markdown("""
-        # Semantic Chunker
+        # Semantic Kinematics
 
         Embedding space analysis for text.
 

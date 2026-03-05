@@ -1,5 +1,5 @@
 """
-Configuration loader and validator for the semantic chunker pipeline.
+Configuration loader and validator for the semantic kinematics pipeline.
 
 Loads config.yaml from repo root and provides typed access to settings.
 """
@@ -164,7 +164,7 @@ def load_config(config_path: Optional[Path] = None) -> PipelineConfig:
         ValueError: If config validation fails
     """
     if config_path is None:
-        # Look for config.yaml in repo root (parent of semantic_chunker/)
+        # Look for config.yaml in repo root (parent of semantic_kinematics/)
         repo_root = Path(__file__).parent.parent
         config_path = repo_root / "config.yaml"
 

@@ -9,7 +9,7 @@ Tools:
 from typing import Any, Dict, List
 from mcp.types import Tool
 
-from semantic_chunker.mcp.state_manager import StateManager
+from semantic_kinematics.mcp.state_manager import StateManager
 
 
 def get_tools() -> List[Tool]:
@@ -124,7 +124,7 @@ async def calculate_drift(
         return {"error": "Both text_a and text_b are required"}
 
     try:
-        from semantic_chunker.prompt_geometry.metrics import cosine_distance
+        from semantic_kinematics.prompt_geometry.metrics import cosine_distance
 
         embed_fn = manager.get_embed_fn()
 

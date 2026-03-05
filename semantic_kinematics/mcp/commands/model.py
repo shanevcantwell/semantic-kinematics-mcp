@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from mcp.types import Tool
 
-from semantic_chunker.mcp.state_manager import StateManager
+from semantic_kinematics.mcp.state_manager import StateManager
 
 
 def get_tools() -> List[Tool]:

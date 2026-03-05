@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
 
-from semantic_chunker.embeddings.base import EmbeddingAdapter
+from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
 
 def _patch_bidirectional_mistral(embedding_model):

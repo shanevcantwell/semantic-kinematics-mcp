@@ -6,7 +6,7 @@ Provides single-pair and bulk semantic drift calculation.
 
 import gradio as gr
 
-from semantic_chunker.ui.tabs.drift.handlers import (
+from semantic_kinematics.ui.tabs.drift.handlers import (
     calculate_drift_single,
     process_bulk_drift
 )

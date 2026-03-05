@@ -17,7 +17,7 @@ from typing import Dict, Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 if TYPE_CHECKING:
-    from semantic_chunker.embeddings.base import EmbeddingAdapter
+    from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
 
 def _default_backend() -> str:
@@ -81,7 +81,7 @@ class StateManager:
             Configured EmbeddingAdapter instance
         """
         if self._adapter is None:
-            from semantic_chunker.embeddings import get_adapter
+            from semantic_kinematics.embeddings import get_adapter
             self._adapter = get_adapter(self._backend, **self._backend_kwargs)
         return self._adapter
 

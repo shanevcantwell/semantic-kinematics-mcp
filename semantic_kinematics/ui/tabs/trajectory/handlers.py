@@ -12,18 +12,18 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from semantic_chunker.mcp.commands.trajectory import (
+from semantic_kinematics.mcp.commands.trajectory import (
     TrajectoryAnalyzer,
     TrajectoryMetrics,
     analyze_trajectory,
     compare_trajectories_handler,
 )
-from semantic_chunker.mcp.commands.model import (
+from semantic_kinematics.mcp.commands.model import (
     model_status as _model_status,
     model_load as _model_load,
     model_unload as _model_unload,
 )
-from semantic_chunker.ui.state import state_manager, trajectory_session
+from semantic_kinematics.ui.state import state_manager, trajectory_session
 
 
 async def analyze_single(

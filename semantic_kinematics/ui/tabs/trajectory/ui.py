@@ -8,7 +8,7 @@ Includes model load/unload controls and trajectory profile plots.
 
 import gradio as gr
 
-from semantic_chunker.ui.tabs.trajectory.handlers import (
+from semantic_kinematics.ui.tabs.trajectory.handlers import (
     analyze_single,
     compare_passages,
     get_model_status,

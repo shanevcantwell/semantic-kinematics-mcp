@@ -8,7 +8,7 @@ Tools:
 from typing import Any, Dict, List
 from mcp.types import Tool
 
-from semantic_chunker.mcp.state_manager import StateManager
+from semantic_kinematics.mcp.state_manager import StateManager
 
 
 # Content truncation limit
@@ -37,7 +37,7 @@ def get_tools() -> List[Tool]:
                         "description": (
                             "Category name → exemplar text mapping. "
                             "CALLER is responsible for building exemplars "
-                            "(e.g., from folder contents). semantic-chunker "
+                            "(e.g., from folder contents). semantic-kinematics "
                             "has no filesystem access."
                         ),
                         "additionalProperties": {"type": "string"}

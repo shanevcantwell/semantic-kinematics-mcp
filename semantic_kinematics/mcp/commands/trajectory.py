@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from mcp.types import Tool
 
-from semantic_chunker.mcp.state_manager import StateManager
+from semantic_kinematics.mcp.state_manager import StateManager
 
 
 def get_tools() -> List[Tool]:

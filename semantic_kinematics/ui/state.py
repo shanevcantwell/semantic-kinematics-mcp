@@ -1,5 +1,5 @@
 """
-State management for the semantic-chunker UI.
+State management for the semantic-kinematics UI.
 
 Provides:
 - Singleton StateManager for embedding cache (shared across tabs)
@@ -9,7 +9,7 @@ Provides:
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from semantic_chunker.mcp.state_manager import StateManager
+from semantic_kinematics.mcp.state_manager import StateManager
 
 
 # Singleton for embedding cache (shared across all tabs)

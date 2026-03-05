@@ -1,12 +1,12 @@
 """
-Embedding adapters for semantic-chunker.
+Embedding adapters for semantic-kinematics.
 
 Provides a unified interface for different embedding backends:
 - SentenceTransformers (default): Native PyTorch, supports NV-Embed-v2
 - LMStudio: OpenAI-compatible API for GGUF'd models
 
 Usage:
-    from semantic_chunker.embeddings import get_adapter
+    from semantic_kinematics.embeddings import get_adapter
 
     # Default: SentenceTransformers with NV-Embed-v2
     adapter = get_adapter()
@@ -19,7 +19,7 @@ Usage:
 
 from typing import Optional
 
-from semantic_chunker.embeddings.base import EmbeddingAdapter
+from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
 
 def get_adapter(
@@ -50,17 +50,17 @@ def get_adapter(
         adapter = get_adapter("sentence_transformers", model_path="/my/model")
     """
     if backend == "nv_embed":
-        from semantic_chunker.embeddings.nv_embed_adapter import NVEmbedAdapter
+        from semantic_kinematics.embeddings.nv_embed_adapter import NVEmbedAdapter
         return NVEmbedAdapter(**kwargs)
 
     elif backend == "sentence_transformers":
-        from semantic_chunker.embeddings.sentence_transformers_adapter import (
+        from semantic_kinematics.embeddings.sentence_transformers_adapter import (
             SentenceTransformersAdapter
         )
         return SentenceTransformersAdapter(**kwargs)
 
     elif backend == "lmstudio":
-        from semantic_chunker.embeddings.lmstudio import LMStudioAdapter
+        from semantic_kinematics.embeddings.lmstudio import LMStudioAdapter
         return LMStudioAdapter(**kwargs)
 
     else:

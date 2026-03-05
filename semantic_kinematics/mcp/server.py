@@ -1,11 +1,11 @@
 """
-MCP Server for semantic-chunker tools.
+MCP Server for semantic-kinematics tools.
 
 Entry point for JSON-RPC over stdio communication.
 Follows surf-mcp patterns for tool registration and dispatch.
 
 Usage:
-    semantic-chunker-mcp  # starts server, waits for JSON-RPC
+    semantic-kinematics-mcp  # starts server, waits for JSON-RPC
 """
 
 from dotenv import load_dotenv
@@ -19,12 +19,12 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from semantic_chunker.mcp.state_manager import StateManager
-from semantic_chunker.mcp.commands import embeddings, classification, trajectory, model
+from semantic_kinematics.mcp.state_manager import StateManager
+from semantic_kinematics.mcp.commands import embeddings, classification, trajectory, model
 
 
 # Initialize server and state
-server = Server("semantic-chunker")
+server = Server("semantic-kinematics")
 state_manager = StateManager()
 
 
