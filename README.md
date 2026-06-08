@@ -36,6 +36,12 @@ Or with docker-compose for host networking and data mounts:
 docker-compose up
 ```
 
+## Architecture
+
+A single stateless core, reachable only through the MCP contract. The Gradio UI and agentic tools (MCP clients) orchestrate by composing contracted tool calls — they never reach across the contract boundary into core internals. Model-server lifecycle lives outside the core, managed by llauncher.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full layering invariant, layer definitions, ASCII diagram, and current conformance gaps.
+
 ## Embedding Backends
 
 Three interchangeable backends, selected via `EMBEDDING_BACKEND` environment variable:
