@@ -20,26 +20,38 @@ Four rules. All four apply simultaneously.
 
 ## The layers
 
-### Core (stateless execution)
+### Control-plane core (stateless execution)
 
-**What lives here:** The analysis and embedding primitives.
+**What lives here:** The analysis primitives — the contracted MCP tool implementations.
 
-- `semantic_kinematics/mcp/commands/` — embeddings, trajectory, classification, axis\_alignment, model (six contracted tools)
-- `semantic_kinematics/embeddings/` — the `EmbeddingAdapter` ABC and three backends (`nv_embed`, `lmstudio`, `sentence_transformers`); the unified adapter target of ADR-002
+- `semantic_kinematics/mcp/commands/` — five command modules: `embeddings.py`, `trajectory.py`, `classification.py`, `axis_alignment.py`, `model.py`
 
 **Rules:**
 - No session state retained between calls. An adapter is resolved, used, and released per call (target of ADR-003; not yet implemented).
 - No awareness of which consumer is calling. The core cannot contain logic paths that exist only because the Gradio UI needs them.
 - Model-server lifecycle is not owned here. Starting and stopping embedding servers is llauncher's responsibility (ADR-003).
+- MCP is the sole door into this layer. The invariant — "MCP is the sole contract" — scopes precisely to this control-plane core. A consumer that bypasses the MCP contract to reach `mcp/commands/` directly is an instant fail.
+
+### Shared substrate: the embedding adapter
+
+**What lives here:** The `EmbeddingAdapter` abstraction and its backends.
+
+- `semantic_kinematics/embeddings/` — the `EmbeddingAdapter` ABC (`base.py`) and three backends (`nv_embed_adapter.py`, `lmstudio.py`, `sentence_transformers_adapter.py`); the unified adapter target of ADR-002
+
+This is a layer **beneath** both the control-plane core and the data-plane. It is not itself the contracted core. The MCP-sole-contract invariant governs access to the control-plane core (`mcp/commands/`), not access to this substrate. Both the analysis core and bulk data-plane jobs rest on the substrate; neither relationship is a bypass of the other.
+
+**Rules:**
+- The adapter substrate is the lowest sk-mcp layer. Nothing in it imports from `mcp/commands/` or `mcp/server.py`.
+- The control-plane core uses it to execute analysis. The data plane uses it for bulk embedding. Those are different applications of the same substrate.
 
 ### Contract (MCP tool surface)
 
 **What lives here:** `semantic_kinematics/mcp/server.py`.
 
-The server dispatches JSON-RPC tool calls to the command modules. This is the sole authorized point of entry into the core. The contracted tool surface is currently nine tools: `embed_text`, `calculate_drift`, `classify_document`, `analyze_trajectory`, `compare_trajectories`, `analyze_axis_alignment`, `model_status`, `model_load`, `model_unload`.
+The server dispatches JSON-RPC tool calls to the command modules. This is the sole authorized point of entry into the control-plane core. The contracted tool surface is currently nine tools: `embed_text`, `calculate_drift`, `classify_document`, `analyze_trajectory`, `compare_trajectories`, `analyze_axis_alignment`, `model_status`, `model_load`, `model_unload`.
 
 **Rules:**
-- All consumer access to core primitives passes through this surface.
+- All control-plane consumer access to analysis primitives passes through this surface.
 - The contract is versioned; adding or removing a tool is a surface change, not an internal refactor.
 
 ### Orchestration / consumer plane
@@ -47,9 +59,10 @@ The server dispatches JSON-RPC tool calls to the command modules. This is the so
 **What lives here:** The Gradio UI (`semantic_kinematics/ui/`) and any external MCP client (Claude Code, scripts, agents).
 
 **Rules:**
-- Consumers compose and sequence contracted MCP tool calls.
+- Control-plane consumers compose and sequence contracted MCP tool calls.
 - A consumer may cache results client-side for its own reactivity (e.g. the UI slider re-using cached embeddings — see ADR-003). That cache lives in the consumer, not the core.
-- A consumer may not import from `semantic_kinematics.mcp.commands.*` or `semantic_kinematics.embeddings.*` directly. Those are core internals.
+- A control-plane consumer may not import from `semantic_kinematics.mcp.commands.*` directly — that bypasses the contract. The Gradio UI must not import from `semantic_kinematics.embeddings.*` to perform analysis either — that substitutes a direct adapter call for an MCP-contracted analysis call, which also bypasses the contract.
+- `BulkEmbedder` is not a control-plane consumer. It is a data-plane application on the shared substrate (ADR-003 control-plane/data-plane split). The consumer-plane rules do not classify it as a violator. If a data-plane job needs analysis results, it must re-enter through the MCP contract like any other consumer.
 
 ### Lifecycle plane (out of process)
 
@@ -64,63 +77,75 @@ Current scope: llauncher manages llama-server (GGUF) processes. The `nv_embed` p
 ## Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                   ORCHESTRATION / CONSUMER PLANE                │
-│                                                                 │
-│   ┌──────────────────┐          ┌──────────────────────────┐   │
-│   │   Gradio UI      │          │  MCP clients / agents    │   │
-│   │  (semantic_      │          │  (Claude Code, scripts)  │   │
-│   │   kinematics/ui) │          │                          │   │
-│   └────────┬─────────┘          └────────────┬─────────────┘   │
-│            │  MCP tool calls only             │                 │
-│            │  (JSON-RPC over stdio)           │                 │
-└────────────┼─────────────────────────────────┼─────────────────┘
-             │                                  │
-═════════════╪══════════════════════════════════╪═════════════════
-             │         CONTRACT BOUNDARY        │
-═════════════╪══════════════════════════════════╪═════════════════
-             │                                  │
-             └──────────────┬───────────────────┘
-                            ▼
-             ┌──────────────────────────────────┐
-             │         MCP SERVER               │
-             │  semantic_kinematics/mcp/         │
-             │  server.py  (sole entry point)   │
-             └──────────────────────────────────┘
-                            │
-                            ▼
-             ┌──────────────────────────────────┐
-             │      CORE (stateless target)     │
-             │                                  │
-             │  mcp/commands/                   │
-             │    embeddings.py                 │
-             │    trajectory.py                 │
-             │    classification.py             │
-             │    axis_alignment.py             │
-             │    model.py                      │
-             │                                  │
-             │  embeddings/  (adapter layer)    │
-             │    base.py  ← EmbeddingAdapter   │
-             │    nv_embed_adapter.py           │
-             │    lmstudio.py                   │
-             │    sentence_transformers_adapter  │
-             │    [bulk.py — ADR-002 BulkEmbedder│
-             │     for any batch corpus]        │
-             └────────────┬─────────────────────┘
-                          │ adapter calls
-                          ▼
-             ┌──────────────────────────────────┐      ┌──────────────────┐
-             │   EMBEDDING BACKENDS (external)  │      │  llauncher       │
-             │                                  │      │  (out of process)│
-             │   llama-server  (GGUF/OpenAI)    │◄─────│                  │
-             │   NV-Embed-v2   (SentenceXformrs)│      │  start/stop/swap │
-             │   LM Studio     (OpenAI API)     │      │  model servers   │
-             └──────────────────────────────────┘      └──────────────────┘
+┌──────────────────────────────────┐          ┌──────────────────────────────┐
+│   ORCHESTRATION / CONSUMER PLANE │          │  DATA PLANE                  │
+│                                  │          │                              │
+│  ┌──────────────┐  ┌───────────┐ │          │  ┌────────────────────────┐  │
+│  │  Gradio UI   │  │  MCP      │ │          │  │  BulkEmbedder          │  │
+│  │  (ui/)       │  │  clients/ │ │          │  │  (embeddings/bulk.py)  │  │
+│  │              │  │  agents   │ │          │  │                        │  │
+│  └──────┬───────┘  └─────┬─────┘ │          │  └──────────┬─────────────┘  │
+│         │ MCP tool calls │       │          │             │ adapter calls   │
+│         │ (JSON-RPC/     │       │          │             │ only; no        │
+│         │  stdio) only   │       │          │             │ mcp/commands/   │
+└─────────┼────────────────┼───────┘          └─────────────┼────────────────┘
+          │                │                                │
+══════════╪════════════════╪════════════════════════════════│═════════════════
+          │  CONTRACT BOUNDARY (governs access to analysis  │
+══════════╪════════════════╪══════════════════  core only)  │═════════════════
+          │                │                                │
+          └───────┬────────┘                                │
+                  ▼                                         │
+  ┌───────────────────────────────┐                         │
+  │         MCP SERVER            │                         │
+  │  mcp/server.py                │                         │
+  │  (sole entry point to core)   │                         │
+  └───────────────┬───────────────┘                         │
+                  │                                         │
+                  ▼                                         │
+  ┌───────────────────────────────┐                         │
+  │  CONTROL-PLANE CORE           │                         │
+  │  (stateless analysis target)  │                         │
+  │                               │                         │
+  │  mcp/commands/                │                         │
+  │    embeddings.py              │                         │
+  │    trajectory.py              │                         │
+  │    classification.py          │                         │
+  │    axis_alignment.py          │                         │
+  │    model.py                   │                         │
+  └───────────────┬───────────────┘                         │
+                  │ uses substrate                          │ uses substrate
+                  │                                         │
+══════════════════╪═════════════════════════════════════════╪═════════════════
+                  │     SHARED SUBSTRATE                    │
+══════════════════╪═════════════════════════════════════════╪═════════════════
+                  │                                         │
+                  └───────────────┬─────────────────────────┘
+                                  ▼
+                  ┌───────────────────────────────┐
+                  │  EMBEDDING ADAPTER            │
+                  │  embeddings/                  │
+                  │    base.py ← EmbeddingAdapter │
+                  │    nv_embed_adapter.py        │
+                  │    lmstudio.py                │
+                  │    sentence_transformers_      │
+                  │      adapter.py               │
+                  └───────────────┬───────────────┘
+                                  │ adapter calls
+                                  ▼
+                  ┌───────────────────────────────┐      ┌──────────────────┐
+                  │  EMBEDDING BACKENDS (external) │      │  llauncher       │
+                  │                               │      │  (out of process)│
+                  │  llama-server  (GGUF/OpenAI)  │◄─────│                  │
+                  │  NV-Embed-v2  (SentenceXformrs)│      │  start/stop/swap │
+                  │  LM Studio    (OpenAI API)    │      │  model servers   │
+                  └───────────────────────────────┘      └──────────────────┘
 ```
 
 Notes on the diagram:
-- Every consumer arrow crosses the contract boundary through `server.py`. There are no lateral arrows from the consumer plane directly into `mcp/commands/` or `embeddings/`.
-- `BulkEmbedder` (ADR-002) is a batch consumer of the adapter layer — it does not add a new path through the contract; bulk embedding jobs use the adapter directly without going through the MCP server.
+- The contract boundary governs access to the **control-plane core** (`mcp/commands/`) only. Every control-plane consumer arrow crosses it through `server.py`. No lateral arrows run from the consumer plane directly into `mcp/commands/`.
+- `BulkEmbedder` is in the data plane — outside and beside the contract boundary. It draws directly on the shared adapter substrate. It does not cross the contract boundary and does not touch `mcp/commands/`.
+- Both the control-plane core and `BulkEmbedder` sit on top of the shared adapter substrate. That is a scoping fact, not an exception to the invariant.
 - llauncher manages server lifecycle; sk-mcp talks to the resulting running endpoint.
 
 ---
@@ -139,9 +164,11 @@ Third, **composability across consumers**: a stateless core can be called by any
 
 ## The unified embedding adapter (ADR-002)
 
-The `EmbeddingAdapter` ABC (`embeddings/base.py`) is the single interface the core uses to reach any embedding backend. Three concrete adapters exist today: `nv_embed`, `lmstudio`, and `sentence_transformers`. ADR-002 generalizes the OpenAI-compatible adapter to cover llama-server and LM Studio through one parameterized implementation.
+The `EmbeddingAdapter` ABC (`embeddings/base.py`) is the single interface used to reach any embedding backend. Three concrete adapters exist today: `nv_embed`, `lmstudio`, and `sentence_transformers`. ADR-002 generalizes the OpenAI-compatible adapter to cover llama-server and LM Studio through one parameterized implementation.
 
-`BulkEmbedder` (ADR-002, `embeddings/bulk.py` on `feat/embedding-engine`) wraps any `EmbeddingAdapter` and adds checkpoint/resume, sub-chunking with vector averaging, token-aware batching, and backoff retries. It is a batch consumer of the adapter — not a parallel pathway into the core. A bulk embedding job (e.g. embedding a large background corpus for axis-alignment null construction) calls `BulkEmbedder` directly against the adapter layer; it does not go through the MCP server. This is legitimate: ADR-003 explicitly separates the data-plane (bulk ingestion, which need not be MCP) from the control-plane (analysis tools, which must be stateless MCP calls).
+The adapter layer is a **shared substrate** beneath both the control-plane core and the data plane — not itself a contracted core, and not subject to the MCP-sole-contract rule. That rule scopes to `mcp/commands/` (the analysis primitives). The adapter substrate is the foundation on which those primitives and bulk data-plane jobs both rest.
+
+`BulkEmbedder` (ADR-002, `embeddings/bulk.py` on `feat/embedding-engine`) wraps any `EmbeddingAdapter` and adds checkpoint/resume, sub-chunking with vector averaging, token-aware batching, and backoff retries. It is a data-plane application on the shared substrate: it invokes no analysis primitive from `mcp/commands/` and crosses no contract boundary. ADR-003's control-plane/data-plane split is the source of this scoping — it defines what the control-plane invariant covers and what lies outside its scope. If a bulk job needed analysis results (e.g. drift scoring on embedded chunks), it would re-enter through the MCP contract like any other consumer.
 
 `model_name` is a canonical model identity, not a backend label (ADR-002, Decision 2). The axis-alignment null cache is keyed by `model_name`; a mismatch causes an explicit refusal. This only works if the same underlying model served through different transports produces the same `model_name` string — the unified adapter is where that contract is enforced.
 
