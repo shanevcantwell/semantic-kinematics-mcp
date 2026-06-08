@@ -20,7 +20,9 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from semantic_kinematics.mcp.state_manager import StateManager
-from semantic_kinematics.mcp.commands import embeddings, classification, trajectory, model
+from semantic_kinematics.mcp.commands import (
+    embeddings, classification, trajectory, model, axis_alignment
+)
 
 
 # Initialize server and state
@@ -35,6 +37,7 @@ async def list_tools() -> List[Tool]:
     tools.extend(embeddings.get_tools())
     tools.extend(classification.get_tools())
     tools.extend(trajectory.get_tools())
+    tools.extend(axis_alignment.get_tools())
     tools.extend(model.get_tools())
     return tools
 
@@ -62,6 +65,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             result = await trajectory.analyze_trajectory(state_manager, arguments)
         elif name == "compare_trajectories":
             result = await trajectory.compare_trajectories_handler(state_manager, arguments)
+
+        # Axis-alignment tool
+        elif name == "analyze_axis_alignment":
+            result = await axis_alignment.analyze_axis_alignment(state_manager, arguments)
 
         # Model management tools
         elif name == "model_status":
