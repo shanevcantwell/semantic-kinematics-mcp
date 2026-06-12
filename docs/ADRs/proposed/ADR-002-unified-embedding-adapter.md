@@ -1,7 +1,12 @@
 # ADR-002: Unified embedding adapter across kinematics and thought-vault
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-11)
 **Date:** 2026-06-07
+
+> **Note on file path:** This file remains at `docs/ADRs/proposed/ADR-002-unified-embedding-adapter.md`
+> and will not be moved. Several documents across this repo and a private sibling repo link to
+> this exact path; moving it would break those references. The Status field above is authoritative
+> for the acceptance state of this ADR.
 
 ## Context
 
@@ -122,8 +127,44 @@ bulk machinery to extract) and its `docs/embedding-checkpoint-bug.md`.
 
 **Open threads:**
 - ADR numbering across the two repos (kinematics `ADR-00N` vs the vault's own
-  `ADR-003/004` scheme).
-- Exact canonical-`model_name` format and how transport metadata travels
-  alongside it.
-- Whether `BulkEmbedder` lives beside the adapters or in its own module.
-- Migration ordering: shared adapter first, then vault cutover, then null rebuild.
+  `ADR-003/004` scheme). *(Still open.)*
+- ~~Exact canonical-`model_name` format and how transport metadata travels
+  alongside it.~~ → Resolved. See Resolution 1.
+- ~~Whether `BulkEmbedder` lives beside the adapters or in its own module.~~
+  → Resolved. See Resolution 2.
+- ~~Migration ordering: shared adapter first, then vault cutover, then null
+  rebuild.~~ → Affirmed as written; tracked in sk-mcp #11. See Resolution 3.
+
+---
+
+## Resolved decisions (2026-06-11)
+
+### Resolution 1 — Canonical `model_name` format
+
+Settled jointly with ADR-003 Resolution 1: `model_name` is **the same canonical
+string llauncher uses** (e.g. `embeddinggemma-300M-F32`) — the model's identity
+independent of transport. No `Backend:` prefix, no `.gguf` suffix. Transport
+metadata (backend type, `base_url`) rides beside `model_name` as adapter
+construction detail and is never part of the identity the ADR-001 null cache
+keys on. Changing this string remains a null-cache-invalidating event; existing
+caches keyed by legacy strings (`LMStudio:<model>`,
+`embeddinggemma-300M-F32.gguf`) must be rebuilt or remapped during migration
+(sk-mcp #11, item 2).
+
+### Resolution 2 — `BulkEmbedder` location
+
+`BulkEmbedder` lives beside the adapters at
+`semantic_kinematics/embeddings/bulk.py`, merged to main via PR #12 with
+`scripts/embed_corpus.py` and an offline test suite. It wraps any
+`EmbeddingAdapter` per Decision 3; no separate module is warranted while sk-mcp
+is its only home.
+
+### Resolution 3 — Migration ordering and tracking
+
+The ordering stands as written in Decision 7's spirit: shared adapter
+generalization + `model_name` canonicalization + normalization audit first,
+then vault cutover (shim over `get_adapter() + BulkEmbedder`), then null
+rebuild. Implementation is tracked in **sk-mcp #11**; the corpus validation run
+(sk-mcp #3) proceeds on the merged `BulkEmbedder` without waiting, but its
+embeddings become null-cache-eligible only after `model_name` canonicalization
+lands.
