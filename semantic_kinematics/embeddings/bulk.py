@@ -129,8 +129,8 @@ class BulkEmbedder:
 
         Only entries with a non-zero vector of the right dimension and no
         ``_failed`` marker count as completed; zero vectors and ``_failed``
-        entries are omitted so they are retried on resume. Corrupt lines abort
-        the load and start fresh.
+        entries are omitted so they are retried on resume. Corrupt lines are
+        skipped with a warning; valid entries on other lines are kept.
         """
         completed: Dict[str, np.ndarray] = {}
         path = self.checkpoint_path
@@ -138,24 +138,28 @@ class BulkEmbedder:
             return completed
 
         dim = self.adapter.dimensions
-        try:
-            with open(path, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
+        with open(path, "r") as f:
+            for lineno, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
                     entry = json.loads(line)
                     cid = entry["chunk_id"]
                     vec = entry.get("embedding")
-                    if entry.get("_failed", False):
-                        continue
-                    if not vec or len(vec) != dim:
-                        continue
-                    arr = np.asarray(vec, dtype=float)
-                    if float(np.dot(arr, arr)) > 1e-10:
-                        completed[cid] = arr
-        except (json.JSONDecodeError, KeyError):
-            return {}  # Corrupt checkpoint -- start fresh.
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    print(
+                        f"[bulk] skipping corrupt checkpoint line {lineno}",
+                        file=sys.stderr,
+                    )
+                    continue
+                if entry.get("_failed", False):
+                    continue
+                if not vec or len(vec) != dim:
+                    continue
+                arr = np.asarray(vec, dtype=float)
+                if float(np.dot(arr, arr)) > 1e-10:
+                    completed[cid] = arr
         return completed
 
     # ------------------------------------------------------------------
@@ -205,11 +209,22 @@ class BulkEmbedder:
             file=sys.stderr,
         )
 
+        if not pending:
+            # Nothing to embed: leave the checkpoint file untouched.
+            return completed
+
         # Precompute sub-chunks + token cost per pending text once.
         prepared: List[Tuple[str, List[str], int]] = []
         for text, cid in pending:
             sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
             cost = sum(self._estimate_tokens(sc) for sc in sub_chunks)
+            if cost > self.max_tokens_per_request:
+                print(
+                    f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
+                    f"exceeds per-request budget {self.max_tokens_per_request};"
+                    f" it will be sent as its own over-budget group",
+                    file=sys.stderr,
+                )
             prepared.append((cid, sub_chunks, cost))
 
         # Group into request-batches by max_tokens_per_request.
@@ -226,11 +241,14 @@ class BulkEmbedder:
         if current:
             groups.append(current)
 
-        f_out = open(self.checkpoint_path, "a") if self.checkpoint_path else None
+        f_out = None
         start_time = time.time()
         done = skipped
 
         try:
+            if self.checkpoint_path:
+                f_out = open(self.checkpoint_path, "a")
+
             for group in groups:
                 # Flatten all sub-chunks across the group into one batch call.
                 flat: List[str] = []
@@ -258,7 +276,9 @@ class BulkEmbedder:
                     if group_failed or embeddings is None:
                         vec = None
                     elif k == 1:
-                        vec = embeddings[idx]
+                        # Normalize single sub-chunk vectors too, so all stored
+                        # embeddings are unit-norm regardless of adapter behavior.
+                        vec = self._l2_normalize(embeddings[idx])
                     else:
                         vec = self._l2_normalize(embeddings[idx:idx + k].mean(axis=0))
                     idx += k

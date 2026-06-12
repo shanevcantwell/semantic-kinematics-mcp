@@ -61,7 +61,8 @@ def test_short_text_not_split():
     result = embedder.embed_corpus([(short, "a")])
     assert "a" in result
     assert result["a"].shape == (DIM,)
-    # Single sub-chunk: vector used as-is, equals the adapter's vector exactly.
+    # Single sub-chunk: L2-normalized on store; FakeAdapter already returns
+    # unit vectors, so the result matches the adapter's vector.
     np.testing.assert_allclose(result["a"], _unit_vector_for(short))
 
 
@@ -177,6 +178,86 @@ def test_all_ids_present_for_mixed_corpus():
     assert set(result) == {"s", "l", "t"}
     for vec in result.values():
         assert vec.shape == (DIM,)
+
+
+class NonUnitAdapter(FakeAdapter):
+    """Adapter that violates the unit-norm contract (scales vectors by 3)."""
+
+    def embed_batch(self, texts: List[str]) -> np.ndarray:
+        return super().embed_batch(texts) * 3.0
+
+
+def test_single_chunk_normalized_even_with_nonunit_adapter():
+    adapter = NonUnitAdapter()
+    embedder = BulkEmbedder(adapter, max_tokens_per_chunk=1000)
+    result = embedder.embed_corpus([("A short sentence.", "a")])
+    # k == 1 path must L2-normalize too, not store the adapter vector as-is.
+    assert _is_unit(result["a"])
+
+
+def test_no_pending_work_does_not_create_checkpoint(tmp_path):
+    checkpoint = tmp_path / "ckpt.jsonl"
+    adapter = FakeAdapter()
+    embedder = BulkEmbedder(adapter, checkpoint_path=str(checkpoint))
+    result = embedder.embed_corpus([])
+    assert result == {}
+    assert adapter.batch_calls == 0
+    # No pending work: the checkpoint file must not be created.
+    assert not checkpoint.exists()
+
+
+def test_no_pending_work_leaves_checkpoint_untouched(tmp_path):
+    checkpoint = tmp_path / "ckpt.jsonl"
+    valid_vec = _unit_vector_for("valid-text").tolist()
+    original = json.dumps({"chunk_id": "valid", "embedding": valid_vec}) + "\n"
+    checkpoint.write_text(original)
+
+    adapter = FakeAdapter()
+    embedder = BulkEmbedder(adapter, checkpoint_path=str(checkpoint))
+    result = embedder.embed_corpus([("valid-text", "valid")])
+
+    # Everything already completed: no backend call, file byte-identical.
+    assert set(result) == {"valid"}
+    assert adapter.batch_calls == 0
+    assert checkpoint.read_text() == original
+
+
+def test_corrupt_checkpoint_line_keeps_valid_entries(tmp_path, capsys):
+    checkpoint = tmp_path / "ckpt.jsonl"
+    vec_a = _unit_vector_for("text-a").tolist()
+    vec_c = _unit_vector_for("text-c").tolist()
+    lines = [
+        json.dumps({"chunk_id": "a", "embedding": vec_a}),
+        "{this is not json",
+        json.dumps({"chunk_id": "c", "embedding": vec_c}),
+    ]
+    checkpoint.write_text("\n".join(lines) + "\n")
+
+    adapter = FakeAdapter()
+    embedder = BulkEmbedder(adapter, checkpoint_path=str(checkpoint))
+    items = [("text-a", "a"), ("text-b", "b"), ("text-c", "c")]
+    result = embedder.embed_corpus(items)
+
+    # Valid entries survive the corrupt middle line; only "b" is embedded.
+    assert set(result) == {"a", "b", "c"}
+    assert adapter.batch_calls == 1
+    assert adapter.batch_sizes == [1]
+    np.testing.assert_allclose(result["a"], np.asarray(vec_a))
+    np.testing.assert_allclose(result["c"], np.asarray(vec_c))
+    assert "corrupt checkpoint line 2" in capsys.readouterr().err
+
+
+def test_over_budget_item_embeds_as_singleton_group(capsys):
+    adapter = FakeAdapter()
+    # Budget 10; "y" * 100 -> 100//4 + 1 = 26 tokens, over budget on its own.
+    embedder = BulkEmbedder(adapter, max_tokens_per_request=10, max_tokens_per_chunk=1000)
+    items = [("tiny", "t1"), ("y" * 100, "big"), ("tiny2", "t2")]
+
+    result = embedder.embed_corpus(items)
+    # The over-budget item still embeds, isolated in its own group.
+    assert set(result) == {"t1", "big", "t2"}
+    assert adapter.batch_sizes == [1, 1, 1]
+    assert "over-budget" in capsys.readouterr().err
 
 
 def test_split_never_empty_for_nonempty_input():
