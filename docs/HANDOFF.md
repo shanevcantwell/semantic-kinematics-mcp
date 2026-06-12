@@ -66,10 +66,12 @@ ADR numbering scheme (`ADR-001` vs. `ADR-CORE-NNN`).
 Consolidates two independently-drifted embedding implementations (sk-mcp's
 `EmbeddingAdapter` ABC and thought-vault's `EmbeddingBridge`) into one shared
 abstraction living in sk-mcp. The vault will depend on sk-mcp via
-`pip install -e`. The `BulkEmbedder` wrapper (already built on
-`feat/embedding-engine`) adds checkpoint/resume, sub-chunking, token-aware
-batching, and backoff retries to any adapter. The vault's `EmbeddingBridge`
-becomes a deprecated shim over `get_adapter() + BulkEmbedder`. Critically,
+`pip install -e`. The `BulkEmbedder` wrapper (merged via PR #12) adds
+checkpoint/resume, sub-chunking, and token-aware batching to any adapter. It is
+**deliberately retry-free**: in-engine backoff hides server failure patterns;
+recovery is idempotent re-invocation over checkpoint resume, owned by the
+supervising layer (agent/operator). The vault's `EmbeddingBridge`
+is deleted at cutover (no shim — see #11 ruling). Critically,
 `model_name` becomes the underlying model identity (not a backend-prefixed
 label), which allows vault-produced embeddings to key into ADR-001's null cache.
 
