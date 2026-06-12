@@ -1,6 +1,8 @@
 # Cross-Repo Design Handoff Index
 
 **Written:** 2026-06-08  
+**Updated:** 2026-06-11 — ADR-002 and ADR-003 promoted to Accepted; BulkEmbedder
+merged to main (PR #12); ADR-002 migration tracked in sk-mcp #11.  
 **Branch at time of writing:** `docs/handoff-index` (off `feat/axis-alignment`)
 
 ---
@@ -28,8 +30,11 @@ signal and the empirical null distribution for axis-alignment significance tests
 The three ADRs interlock in a specific order of dependency: ADR-002 (unified
 adapter) must land before ADR-001's null cache can receive vault-produced
 embeddings, and ADR-003 (stateless MCP) depends on ADR-002's per-call adapter
-resolution. None of the ADRs are merged or have open PRs yet; all are status
-"Proposed."
+resolution. **ADR-002 and ADR-003 are now Accepted** (PR #10 promoted ADR-003 on
+2026-06-08; ADR-002 followed on 2026-06-11, its `model_name` format settled
+jointly with ADR-003 Resolution 1). ADR-001 remains Proposed pending real-corpus
+validation. ADR files stay under `ADRs/proposed/` to preserve cross-repo links;
+the Status field in each file is authoritative.
 
 ---
 
@@ -37,9 +42,9 @@ resolution. None of the ADRs are merged or have open PRs yet; all are status
 
 | ADR | Decision (one line) | Branch | Origin SHA | Status |
 |-----|---------------------|--------|------------|--------|
-| [ADR-001](ADRs/proposed/ADR-001-referential-axis-alignment.md) | Add `analyze_axis_alignment` tool: project sentences onto an anchor-defined axis, z-scored against a corpus null | `feat/axis-alignment` | `fce5abe` | Proposed |
-| [ADR-002](ADRs/proposed/ADR-002-unified-embedding-adapter.md) | One `EmbeddingAdapter` ABC shared by sk-mcp and thought-vault; `BulkEmbedder` wraps any adapter for corpus-scale work | `docs/adr-002-unified-embedding-adapter` | `ceacd3a` | Proposed |
-| [ADR-003](ADRs/proposed/ADR-003-stateless-mcp-contract.md) | sk-mcp MCP tools become stateless (model selection per-call); `model_load`/`model_unload` removed; lifecycle moves to llauncher | `docs/adr-003-stateless-mcp-contract` | `3a9000e` | Proposed |
+| [ADR-001](ADRs/proposed/ADR-001-referential-axis-alignment.md) | Add `analyze_axis_alignment` tool: project sentences onto an anchor-defined axis, z-scored against a corpus null | merged to main | — | Proposed |
+| [ADR-002](ADRs/proposed/ADR-002-unified-embedding-adapter.md) | One `EmbeddingAdapter` ABC shared by sk-mcp and thought-vault; `BulkEmbedder` wraps any adapter for corpus-scale work | merged to main | — | **Accepted (2026-06-11)** |
+| [ADR-003](ADRs/proposed/ADR-003-stateless-mcp-contract.md) | sk-mcp MCP tools become stateless (model selection per-call); `model_load`/`model_unload` removed; lifecycle moves to llauncher | merged to main (PR #10) | — | **Accepted (2026-06-08)** |
 
 ### ADR-001 — Referential axis-alignment analysis
 
@@ -68,11 +73,13 @@ becomes a deprecated shim over `get_adapter() + BulkEmbedder`. Critically,
 `model_name` becomes the underlying model identity (not a backend-prefixed
 label), which allows vault-produced embeddings to key into ADR-001's null cache.
 
-Open questions left by ADR-002: exact canonical `model_name` format and how
-transport metadata is carried alongside it; whether `BulkEmbedder` lives beside
-the adapters or in its own module; migration ordering (shared adapter → vault
-cutover → null rebuild); dtype/precision unification; ADR numbering across the
-two repos.
+~~Open questions left by ADR-002~~ — resolved at acceptance (2026-06-11, see the
+ADR's "Resolved decisions" section): canonical `model_name` is llauncher's
+string (e.g. `embeddinggemma-300M-F32`), transport metadata is adapter
+construction detail; `BulkEmbedder` lives beside the adapters
+(`embeddings/bulk.py`, merged via PR #12); migration ordering affirmed and
+tracked in sk-mcp #11. Still deferred: dtype/precision unification; ADR
+numbering across the two repos.
 
 ### ADR-003 — Stateless MCP control-plane
 
@@ -85,18 +92,26 @@ reactive slider behavior. The nv_embed path (SentenceTransformers/PyTorch, not
 GGUF) requires llauncher to add a vLLM/SentenceTransformers server type before
 sk-mcp can route it through llauncher — tracked in llauncher #155.
 
-Open questions left by ADR-003: whether `StateManager` is fully removed or
-retained as a thin stateless resolver; exact per-call parameter shape (routed
-`model_id` vs. explicit `backend + base_url + model`); sequencing of llauncher
-vLLM/SentenceTransformers expansion relative to sk-mcp's cutover.
+~~Open questions left by ADR-003~~ — resolved at acceptance (2026-06-08, PR #10,
+see the ADR's "Resolved decisions" section): per-call shape is `model_name` +
+`base_url` with env fallback (no backend enum in the call identity);
+`StateManager` becomes a thin stateless resolver (fields/mutator/cache removed,
+class kept). Still open: sequencing of llauncher vLLM/SentenceTransformers
+expansion (llauncher #155) relative to sk-mcp's cutover — partial cutover
+(llama-server stateless first, nv_embed follows) is the working assumption.
 
 ---
 
-## 4. Code in flight — BulkEmbedder engine
+## 4. Code — BulkEmbedder engine (merged)
 
-Branch: `feat/embedding-engine` | Origin SHA: `acaba76`
+**Merged to main 2026-06-11 via PR #12** (was `feat/embedding-engine`). A
+pre-merge code review surfaced and fixed: k==1 vectors now L2-normalized like
+multi-chunk ones (all stored embeddings unit-norm — load-bearing for ADR-001
+z-scores); checkpoint file handle opened inside try/finally and only when work
+is pending; corrupt checkpoint lines skipped per-line instead of discarding all
+completed work; over-budget single items warn. 13 BulkEmbedder tests passing.
 
-Three files added in a single commit:
+Three files:
 
 - `semantic_kinematics/embeddings/bulk.py` — `BulkEmbedder` class (303 lines):
   wraps any `EmbeddingAdapter`; texts within token limit pass through whole;
@@ -109,8 +124,8 @@ Three files added in a single commit:
 - `scripts/embed_corpus.py` — CLI entry point (86 lines).
 - `tests/test_bulk_embedder.py` — offline `FakeAdapter`-based tests (193 lines).
 
-Status: built and tested with the `FakeAdapter`; **not yet run against the real
-corpus**. The real validation run (sk-mcp #3) is the next concrete step.
+Status: merged, review-hardened, **not yet run against the real corpus**. The
+real validation run (sk-mcp #3) is now unblocked and is the next concrete step.
 
 ---
 
@@ -118,8 +133,10 @@ corpus**. The real validation run (sk-mcp #3) is the next concrete step.
 
 | Issue | Title | What it unblocks |
 |-------|-------|------------------|
-| [sk-mcp #2](https://github.com/shanevcantwell/semantic-kinematics-mcp/issues/2) | Implement ADR-003: stateless MCP control-plane | sk-mcp MCP surface becomes reproducible and self-contained; prerequisite for clean multi-session use |
-| [sk-mcp #3](https://github.com/shanevcantwell/semantic-kinematics-mcp/issues/3) | Run chat-log corpus through BulkEmbedder; validate ~45 min throughput | Validates BulkEmbedder on real data; produces embeddings that serve as ADR-001 axis-alignment null |
+| [sk-mcp #2](https://github.com/shanevcantwell/semantic-kinematics-mcp/issues/2) | Implement ADR-003: stateless MCP control-plane | sk-mcp MCP surface becomes reproducible and self-contained; prerequisite for clean multi-session use; now scoped against the Accepted ADR-003 resolutions |
+| [sk-mcp #3](https://github.com/shanevcantwell/semantic-kinematics-mcp/issues/3) | Run chat-log corpus through BulkEmbedder; validate ~45 min throughput | Validates BulkEmbedder on real data; produces embeddings that serve as ADR-001 axis-alignment null. **Unblocked by PR #12** |
+| [sk-mcp #9](https://github.com/shanevcantwell/semantic-kinematics-mcp/issues/9) | UI bypasses the MCP contract (direct `mcp.commands.*` imports) | UI and external callers go through one door; sequenced after #2 (needs the per-call param shape in place) |
+| [sk-mcp #11](https://github.com/shanevcantwell/semantic-kinematics-mcp/issues/11) | Implement ADR-002: unified embedding adapter migration | Adapter generalization, `model_name` canonicalization (null-cache-invalidating), normalization audit, vault cutover — the gate between #3's embeddings and the ADR-001 null cache |
 | [thought-vault #28](https://github.com/shanevcantwell/thought-vault-integration/issues/28) | Re-extract corpus from richer sources and re-embed | Richer signal (full HTML/markdown, per-message granularity); clean embedding base for all downstream analysis |
 | [thought-vault #29](https://github.com/shanevcantwell/thought-vault-integration/issues/29) | Reproducibility: capture embedding-server config; consolidate bulk runner | Documents llauncher `extra_args` (`--embeddings --log-disable`, ubatch/batch 4096) in-repo; decides fate of uncommitted supervisor script |
 | [llauncher #155](https://github.com/shanevcantwell/llauncher/issues/155) | Add vLLM/SentenceTransformers server type for non-GGUF embedding models | Lets llauncher own nv_embed (4096-d) lifecycle; prerequisite for ADR-003's full stateless nv_embed path |
@@ -132,21 +149,18 @@ corpus**. The real validation run (sk-mcp #3) is the next concrete step.
   `adr-namer-draft.sh` script suggests a cross-repo `ADR-CORE-NNN` scheme.
   Which wins, and does it affect the thought-vault's own `ADR-003/004` numbering?
 
-- **Canonical `model_name` format.** ADR-002 Decision 2 says it should be the
-  underlying model identity (e.g. `embeddinggemma-300M-F32`), not a
-  `Backend:` prefix. The exact format and how transport metadata travels
-  alongside it is not yet specified. Changing this string is a
-  null-cache-invalidating event.
+- ~~**Canonical `model_name` format.**~~ Resolved 2026-06-11 (ADR-002
+  Resolution 1, jointly with ADR-003 Resolution 1): llauncher's canonical
+  string, e.g. `embeddinggemma-300M-F32`; transport metadata is adapter
+  construction detail. Migration of legacy-keyed caches tracked in sk-mcp #11.
 
-- **Per-call parameter shape for stateless tools (ADR-003).** Should tools
-  accept a single routed `model_id` that the server maps to a backend, or
-  explicit `backend + base_url + model` fields? Affects the MCP schema for all
-  six analysis tools.
+- ~~**Per-call parameter shape for stateless tools (ADR-003).**~~ Resolved
+  2026-06-08 (ADR-003 Resolution 1): `model_name` + `base_url`, env fallback
+  (`EMBEDDING_MODEL` / `EMBEDDING_SERVER_URL`); no backend enum in call identity.
 
-- **`StateManager` fate (ADR-003).** Fully removed, or kept as a thin stateless
-  resolver that constructs an adapter from per-call args and holds nothing between
-  calls? Unclear which is cleaner given the current dispatch pattern in
-  `server.py`.
+- ~~**`StateManager` fate (ADR-003).**~~ Resolved 2026-06-08 (ADR-003
+  Resolution 2): thin stateless resolver — class kept, retained fields, mutator,
+  and cross-call cache removed.
 
 - **Which readout leads `analyze_axis_alignment` (ADR-001).** Three candidates:
   position trace z-scores, axis drift (net signed march), or axis-restricted
@@ -159,7 +173,8 @@ corpus**. The real validation run (sk-mcp #3) is the next concrete step.
 - **Normalization audit (ADR-002).** The LM Studio adapter currently does not
   L2-normalize; embeddinggemma via llama-server behavior is not yet verified. ADR-002
   requires each adapter to declare its normalization contract explicitly; the
-  audit has not been done.
+  audit has not been done. Now tracked as sk-mcp #11 item 3. (Mitigation already
+  in place: `BulkEmbedder` L2-normalizes every stored vector as of PR #12.)
 
 - **Sequencing: llauncher #155 vs. sk-mcp ADR-003 cutover.** sk-mcp can go
   stateless against llama-server backends immediately; the nv_embed (PyTorch)
@@ -172,53 +187,56 @@ corpus**. The real validation run (sk-mcp #3) is the next concrete step.
   by BulkEmbedder but have not been formally closed or discarded. PR #27
   (checkpoint-resume fix) is still open.
 
-- **BulkEmbedder module location (ADR-002).** Currently
-  `semantic_kinematics/embeddings/bulk.py`. ADR-002 notes the question of whether
-  it stays beside the adapters or moves to its own module. Not resolved.
+- ~~**BulkEmbedder module location (ADR-002).**~~ Resolved 2026-06-11 (ADR-002
+  Resolution 2): stays beside the adapters at
+  `semantic_kinematics/embeddings/bulk.py`; merged via PR #12.
 
 ---
 
-## 7. Suggested next actions (ordered)
+## 7. Suggested next actions (ordered, updated 2026-06-11)
 
-1. **Run the corpus through BulkEmbedder** (sk-mcp #3). This is the highest-value
-   next step: it validates the engine on real data, produces embeddings for the
-   ADR-001 null, and surfaces any tuning needed before ADR-002 migration work
-   starts. Configure llauncher's embeddinggemma with `--embeddings --log-disable`
-   and batch/ubatch 4096 (per thought-vault #29) before running.
+Done since the original index: ADR-003 accepted (PR #10), ADR-002 accepted,
+BulkEmbedder merged with review fixes (PR #12), ADR-002 migration issue filed
+(sk-mcp #11). The `model_name` format is settled — corpus embeddings written
+from here forward should use the canonical identity string.
 
-2. **Capture and commit embedding-server config** (thought-vault #29). Before the
-   run, document the required llauncher `extra_args` in the repo so the run is
-   reproducible. Decide the fate of the supervisor script and the #27 PR.
+**Dataset path (critical chain for thought-vault):**
 
-3. **Resolve the `model_name` format (ADR-002).** Pick the canonical identity
-   string before any corpus embeddings are written — changing it later requires
-   rebuilding the null cache and all checkpoint files.
+1. **Capture and commit embedding-server config** (thought-vault #29). Before the
+   run, document the required llauncher `extra_args` (`--embeddings
+   --log-disable`, batch/ubatch 4096) so the run is reproducible. Decide the
+   fate of the supervisor script and the vault's #27 PR (likely superseded by
+   BulkEmbedder).
 
-4. **Open PRs for the three ADRs.** They are "Proposed" with no PR yet. Opening
-   PRs (even with no merge planned immediately) gives a visible review surface
-   and a natural place to resolve ADR-level open questions.
+2. **Run the corpus through BulkEmbedder** (sk-mcp #3). Validates the engine on
+   real data (~80K messages, ~45 min target) and surfaces tuning needs before
+   ADR-002 migration work. Note: until #11 item 2 lands, these embeddings are
+   keyed by the current adapter's `model_name` and are validation output, not
+   yet null-cache-eligible.
 
-5. **Implement ADR-003** (sk-mcp #2). Rework `server.py` dispatch and tool input
-   schemas; resolve `StateManager` fate; delete `commands/model.py`; move UI
-   caching client-side. The llama-server backends can go stateless now; the
-   nv_embed path can follow once llauncher #155 lands.
+3. **ADR-002 migration** (sk-mcp #11): generalize the OpenAI-compatible adapter;
+   canonicalize `model_name` (null-cache-invalidating — rebuild/remap legacy
+   caches); audit normalization per backend; cut the vault over via the
+   `EmbeddingBridge` shim.
 
-6. **llauncher #155: vLLM/SentenceTransformers server type.** Prerequisite for
-   sk-mcp's nv_embed path to become fully stateless. Can be parallelized with
-   step 5.
+4. **Re-extract and re-embed corpus** (thought-vault #28) through the shared
+   adapter at per-message granularity, with canonical `model_name`.
 
-7. **ADR-002 migration.** After the `model_name` format is settled and #3 confirms
-   BulkEmbedder works on real data: generalize `LMStudioAdapter` to cover
-   llama-server; audit normalization per backend; wire `EmbeddingBridge` as a
-   deprecated shim; cut the vault over to the shared adapter.
+5. **Build the ADR-001 axis-alignment null** from the re-embedded corpus
+   (`scripts/build_axis_null.py`); validate `analyze_axis_alignment` against
+   real signal. This is also the natural point to resolve ADR-001's remaining
+   open questions (leading readout, null binding — sk-mcp #1) and promote it.
 
-8. **Re-extract and re-embed corpus** (thought-vault #28). Once the shared adapter
-   and BulkEmbedder are stable, do the full re-extraction from richer sources
-   (full HTML for Gemini, fuller markdown for Claude) and re-embed at
-   per-message granularity.
+**Architecture track (parallel, does not block the dataset path):**
 
-9. **Build the ADR-001 axis-alignment null from the re-embedded corpus.** Once the
-   vault corpus is embedded through the shared adapter with a canonical
-   `model_name`, run `scripts/build_axis_null.py` to produce the empirical null
-   and validate the `analyze_axis_alignment` tool against real signal (absurdist
-   books should flare at high sigma relative to the conversation null).
+6. **Implement ADR-003** (sk-mcp #2) per the accepted resolutions: per-call
+   `model_name` + `base_url`, thin-resolver `StateManager`, delete
+   `commands/model.py`, UI caching client-side, fix `embed_text`'s decorative
+   `model` argument. llama-server backends go stateless now; nv_embed follows
+   llauncher #155.
+
+7. **UI conformance** (sk-mcp #9), sequenced after #2 — route the Gradio UI
+   through the MCP contract instead of direct `mcp.commands.*` imports.
+
+8. **llauncher #155** (vLLM/SentenceTransformers server type) — prerequisite for
+   the fully stateless nv_embed path; parallelizable with 6–7.
