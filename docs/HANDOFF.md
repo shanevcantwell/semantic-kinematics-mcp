@@ -211,10 +211,12 @@ from here forward should use the canonical identity string.
    BulkEmbedder).
 
 2. **Run the corpus through BulkEmbedder** (sk-mcp #3). Validates the engine on
-   real data (~80K messages, ~45 min target) and surfaces tuning needs before
-   ADR-002 migration work. Note: until #11 item 2 lands, these embeddings are
-   keyed by the current adapter's `model_name` and are validation output, not
-   yet null-cache-eligible.
+   real data (~80K messages / ~39K parsed chunks — granularity to reconcile;
+   ~45 min target) and surfaces tuning needs before ADR-002 migration work.
+   Gated by Spike 1 (#20 fix) — see §8; until #11 item 2 lands, these embeddings
+   are keyed by the current adapter's `model_name` and are validation output,
+   not yet null-cache-eligible. Engine core is smoke-validated live (2026-06-11,
+   :8082): 21/22, unit-norm, semantic sanity good, resume idempotent.
 
 3. **ADR-002 migration** (sk-mcp #11): generalize the OpenAI-compatible adapter;
    canonicalize `model_name` (null-cache-invalidating — rebuild/remap legacy
@@ -242,3 +244,84 @@ from here forward should use the canonical identity string.
 
 8. **llauncher #155** (vLLM/SentenceTransformers server type) — prerequisite for
    the fully stateless nv_embed path; parallelizable with 6–7.
+
+---
+
+## 8. Target state & spike plan (2026-06-13)
+
+Spike shapes are derived from a defined terminal state and its dependency chain,
+so each spike reads as "de-risk *this* node/edge," not a loose investigation.
+
+### Terminal state (F)
+
+`analyze_axis_alignment` runs against an empirical null built from the real
+thought-vault corpus and produces calibrated z-scores that separate
+axis-marching passages from the conversation baseline — strongly enough to
+promote **ADR-001 → Accepted** (canonical proof: absurdist text flares at high
+sigma against the conversation null). The entire issue ledger is scaffolding for
+*a null you can trust*. "Trust" decomposes into four properties, each a node:
+
+- **Complete** — no silently dropped content (#20). A null missing its densest
+  passages is biased, not merely smaller.
+- **Correct** — direction-faithful vectors (#17). Magnitude-biased averages
+  corrupt the geometry the z-scores measure.
+- **Reproducible & self-describing** — canonical `model_name` key + provenance
+  in the artifact (#11.2 + #16).
+- **Consumable** — the null loader's guard accepts what the embedder produces
+  (the E→G edge; currently *unproven*).
+
+### Dependency chain (terminal → leaves)
+
+```
+F  analyze_axis_alignment validated → ADR-001 Accepted
+└─ N  null cache built (build_axis_null.py)
+   ├─ G  null loader/guard accepts canonical-keyed, right-dim vectors   ◄── Spike 2 proves this edge
+   └─ E  corpus embedded: complete · correct · canonical-keyed
+      ├─ #20  pre-count via /tokenize → no dropped dense content        ◄── Spike 1 de-risks this node
+      ├─ #17  normalize-before-average → faithful direction
+      ├─ #16  self-describing checkpoint → provenance + safe resume
+      ├─ #11.2 canonical model_name → null-cache eligibility
+      └─ R  resolver seam (#2 / #14 / #15): (model_name, base_url)→adapter,
+            no defaults, hard fail, env fallback  ◄── #11.2 attaches here; shared with the MCP-tool path
+   (corpus supply — cross-repo:)
+   └─ #11.1 adapter generalized · #11.3 normalization declared
+      └─ #11.4 vault cutover (no shim) → vault #28 re-embed → vault #29 reproducible config
+```
+
+Off the critical line to F (real, parallelizable): **#9** (UI/MCP contract, needs
+#2's param shape); **llauncher #155** (gates only the *nv_embed* null path — the
+embeddinggemma path does not need it).
+
+### Spike 1 — Corpus tokenization calibration (de-risks #20; gates #3)
+
+Critical-path leaf, zero upstream deps → runs now. Measurement-shaped: mechanism
+is already proven (`/tokenize` on :8082 returns exact counts; `n_ctx`=2048 hard
+ceiling; dense code ≈1.13 chars/tok vs the chars÷4 assumption). Residual unknowns
+are corpus-level: token distribution over a real sample, what fraction exceeds
+2048 (needs splitting), whether the sentence-splitter's output actually fits
+after splitting (worst case: a boundary-less 2048+-token blob hard-split by
+chars), and the throughput cost of one `/tokenize` round-trip per text at ~39K
+scale vs the 45-min budget. **Output:** exact #20 fix shape (pre-count vs
+rejection-retry vs both), corpus-calibrated `max_tokens_per_chunk`, throughput
+verdict — so the #3 timed run can't silently drop content.
+
+### Spike 2 — Null-cache eligibility, end-to-end (de-risks the E→G junction)
+
+Critical-path junction, de-riskable with **hand-faked inputs** — does not need
+real #11.2/#16/R. Integration-proof-shaped: embed a handful of real vault chunks
+with a *proto* canonical `model_name` and a *proto* self-describing checkpoint
+header, run through `build_axis_null.py` / the null loader, confirm the
+`model_name` guard accepts it and dimensions align. Surfaces any guard-string,
+manifest-schema, or dimension mismatch *now*, before the expensive full embed.
+**Output:** proof the central promise holds at tiny scale; concrete proto-shapes
+that *design* #16, #11.2, and R.
+
+### What is implementation, not spike
+
+R (resolver seam, #2/#14/#15), #17 (normalize-before-average + non-uniform-scale
+regression test), and #11 are execution — their shape is known, waiting only on a
+spike finding (R's canonical-string format ← Spike 2) or direct work. The only
+genuine critical-path *unknowns* are the two nodes the spikes target.
+
+**Sequence:** Spike 1 → Spike 2 → (R + #17 + #16 + #11.2 informed by spikes) →
+real #3 run → #11 migration / vault cutover → null build → ADR-001 validation.
