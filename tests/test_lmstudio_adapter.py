@@ -70,5 +70,25 @@ def test_count_tokens_raises_on_http_error(monkeypatch):
         adapter.count_tokens("x")
 
 
+def test_count_tokens_raises_valueerror_with_body_on_missing_tokens(monkeypatch):
+    """A 200 response lacking 'tokens' must raise a diagnosable ValueError that
+    includes the response body, not an opaque KeyError."""
+    adapter = LMStudioAdapter(base_url="http://localhost:8082/v1")
+
+    def fake_post(url, json=None, **kwargs):
+        return _FakeResponse({"error": "model not loaded"})
+
+    monkeypatch.setattr(
+        "semantic_kinematics.embeddings.lmstudio.requests.post", fake_post
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        adapter.count_tokens("x")
+    msg = str(excinfo.value)
+    assert "tokens" in msg
+    # The actual body is surfaced for diagnosis.
+    assert "model not loaded" in msg
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

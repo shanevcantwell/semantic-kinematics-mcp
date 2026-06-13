@@ -77,6 +77,8 @@ class LMStudioAdapter(EmbeddingAdapter):
 
         llama.cpp exposes ``/tokenize`` at the server root, not under ``/v1``.
         """
+        # Assumes ``/v1`` is the terminal path component of base_url (the
+        # OpenAI-compatible convention); only that trailing segment is stripped.
         root = self._base_url.rstrip("/")
         if root.endswith("/v1"):
             root = root[: -len("/v1")]
@@ -99,7 +101,15 @@ class LMStudioAdapter(EmbeddingAdapter):
         """
         response = requests.post(self._tokenize_url(), json={"content": text})
         response.raise_for_status()
-        return len(response.json()["tokens"])
+        payload = response.json()
+        if not isinstance(payload, dict) or "tokens" not in payload:
+            body = repr(payload)
+            if len(body) > 500:
+                body = body[:500] + "...(truncated)"
+            raise ValueError(
+                f"/tokenize returned 200 but no 'tokens' field; body={body}"
+            )
+        return len(payload["tokens"])
 
     def embed(self, text: str) -> np.ndarray:
         """

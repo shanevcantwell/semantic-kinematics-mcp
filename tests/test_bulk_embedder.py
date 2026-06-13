@@ -352,5 +352,100 @@ def test_split_never_empty_for_nonempty_input():
     assert "".join(chunks) == blob
 
 
+def test_hard_split_bisect_on_runon_input_terminates_under_ceiling():
+    """_hard_split_by_tokens must bisect a single run-on input that has NO
+    sentence-boundary punctuation into pieces each <= the ceiling, and the
+    bisection must terminate.
+
+    The DenseAdapter reports ~1 token/char so a punctuation-free run-on of
+    plain characters has a true token count well over the ceiling; with no
+    boundary to split on, _split_text falls through to _hard_split_by_tokens
+    which bisects on character length against the real tokenizer.
+    """
+
+    class DenseAdapter(FakeAdapter):
+        def count_tokens(self, text: str) -> int:
+            # ~1 token/char: a punctuation-free blob blows past the ceiling.
+            return max(1, len(text))
+
+    adapter = DenseAdapter()
+    ceiling = 20
+    embedder = BulkEmbedder(
+        adapter, max_tokens_per_chunk=ceiling, max_tokens_per_request=10_000
+    )
+    # No ., !, ?, or newline anywhere -> one atomic "sentence" far over ceiling.
+    runon = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+    assert adapter.count_tokens(runon) > ceiling
+
+    pieces = embedder._hard_split_by_tokens(runon, ceiling)
+    assert len(pieces) > 1
+    # Every piece fits the true-token ceiling and the bisect terminated.
+    assert all(adapter.count_tokens(p) <= ceiling for p in pieces)
+    # Lossless reassembly.
+    assert "".join(pieces) == runon
+
+    # End-to-end through _split_text (no boundary -> hits the hard-split path).
+    sub_chunks = embedder._split_text(runon, ceiling)
+    assert len(sub_chunks) > 1
+    assert all(adapter.count_tokens(sc) <= ceiling for sc in sub_chunks)
+
+    result = embedder.embed_corpus([(runon, "runon")])
+    assert "runon" in result
+    assert _is_unit(result["runon"])
+
+
+def test_count_tokens_failure_during_prep_marks_item_failed_and_continues(tmp_path):
+    """Blocker gate: a count_tokens failure for ONE item during preparation
+    must mark THAT item _failed in the checkpoint, still embed the others,
+    write a resumable checkpoint, and NOT propagate the exception.
+
+    Fails against the pre-fix code (prep ran outside the try, so the raise
+    aborted the whole run with no _failed marker); passes after the fix.
+    """
+
+    class PrepFailAdapter(FakeAdapter):
+        def count_tokens(self, text: str) -> int:
+            if text == "boom":
+                raise RuntimeError("simulated /tokenize failure")
+            return len(text) // 4 + 1
+
+    checkpoint = tmp_path / "ckpt.jsonl"
+    adapter = PrepFailAdapter()
+    embedder = BulkEmbedder(
+        adapter,
+        max_tokens_per_request=10_000,
+        max_tokens_per_chunk=1000,
+        checkpoint_path=str(checkpoint),
+    )
+    items = [("text one", "a"), ("boom", "bad"), ("text two", "b")]
+
+    # No exception escapes.
+    result = embedder.embed_corpus(items)
+
+    # The two good items embedded; the failing one is omitted from output.
+    assert set(result) == {"a", "b"}
+
+    # The checkpoint records the failing item as _failed (resumable), and the
+    # good items as completed -- already-done work is not lost.
+    entries = [json.loads(l) for l in checkpoint.read_text().splitlines() if l]
+    by_id = {e["chunk_id"]: e for e in entries}
+    assert by_id["bad"]["_failed"] is True
+    assert by_id["bad"]["embedding"] == [0.0] * DIM
+    assert "_failed" not in by_id["a"]
+    assert "_failed" not in by_id["b"]
+
+    # Resume with a healthy adapter retries only the _failed item idempotently.
+    good = FakeAdapter()
+    result2 = BulkEmbedder(
+        good,
+        max_tokens_per_request=10_000,
+        max_tokens_per_chunk=1000,
+        checkpoint_path=str(checkpoint),
+    ).embed_corpus([("recovered", "bad")] + [("text one", "a"), ("text two", "b")])
+    assert "bad" in result2
+    # Only the previously-failed item hit the backend on resume.
+    assert good.batch_sizes == [1]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

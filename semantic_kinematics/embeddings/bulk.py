@@ -257,41 +257,76 @@ class BulkEmbedder:
             # Nothing to embed: leave the checkpoint file untouched.
             return completed
 
-        # Precompute sub-chunks + token cost per pending text once.
-        prepared: List[Tuple[str, List[str], int]] = []
-        for text, cid in pending:
-            sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
-            cost = sum(self._count_tokens(sc) for sc in sub_chunks)
-            if cost > self.max_tokens_per_request:
-                print(
-                    f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
-                    f"exceeds per-request budget {self.max_tokens_per_request};"
-                    f" it will be sent as its own over-budget group",
-                    file=sys.stderr,
-                )
-            prepared.append((cid, sub_chunks, cost))
-
-        # Group into request-batches by max_tokens_per_request.
-        groups: List[List[Tuple[str, List[str]]]] = []
-        current: List[Tuple[str, List[str]]] = []
-        current_tokens = 0
-        for cid, sub_chunks, cost in prepared:
-            if current and current_tokens + cost > self.max_tokens_per_request:
-                groups.append(current)
-                current = []
-                current_tokens = 0
-            current.append((cid, sub_chunks))
-            current_tokens += cost
-        if current:
-            groups.append(current)
-
         f_out = None
         start_time = time.time()
         done = skipped
 
+        def mark_failed(cid: str) -> None:
+            """Write a ``_failed`` marker for ``cid`` so resume retries it.
+
+            Same checkpoint mechanism the embed-batch failure path uses: a
+            permanently-failed item is recorded with a zero vector and the
+            ``_failed`` flag, never silently dropped, so an idempotent
+            re-invocation picks it back up.
+            """
+            if f_out is not None:
+                f_out.write(
+                    json.dumps(
+                        {
+                            "chunk_id": cid,
+                            "embedding": zero_vec,
+                            "_failed": True,
+                        }
+                    )
+                    + "\n"
+                )
+
         try:
             if self.checkpoint_path:
                 f_out = open(self.checkpoint_path, "a")
+
+            # Precompute sub-chunks + token cost per pending text once. A
+            # count_tokens/_split_text failure for ONE item marks just that
+            # item _failed and continues -- symmetric with the embed-batch
+            # failure path below -- rather than aborting the whole run and
+            # losing already-completed work with no resumable marker.
+            prepared: List[Tuple[str, List[str], int]] = []
+            for text, cid in pending:
+                try:
+                    sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
+                    cost = sum(self._count_tokens(sc) for sc in sub_chunks)
+                except Exception as exc:  # noqa: BLE001 -- isolate per item.
+                    print(
+                        f"[bulk] preparation (tokenize/split) failed for item "
+                        f"{cid!r} ({exc}); marking _failed and continuing",
+                        file=sys.stderr,
+                    )
+                    mark_failed(cid)
+                    continue
+                if cost > self.max_tokens_per_request:
+                    print(
+                        f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
+                        f"exceeds per-request budget {self.max_tokens_per_request};"
+                        f" it will be sent as its own over-budget group",
+                        file=sys.stderr,
+                    )
+                prepared.append((cid, sub_chunks, cost))
+            if f_out is not None:
+                f_out.flush()
+
+            # Group into request-batches by max_tokens_per_request.
+            groups: List[List[Tuple[str, List[str]]]] = []
+            current: List[Tuple[str, List[str]]] = []
+            current_tokens = 0
+            for cid, sub_chunks, cost in prepared:
+                if current and current_tokens + cost > self.max_tokens_per_request:
+                    groups.append(current)
+                    current = []
+                    current_tokens = 0
+                current.append((cid, sub_chunks))
+                current_tokens += cost
+            if current:
+                groups.append(current)
 
             for group in groups:
                 # Flatten all sub-chunks across the group into one batch call.
@@ -333,7 +368,17 @@ class BulkEmbedder:
                         normalized = np.array(
                             [self._l2_normalize(embeddings[idx + j]) for j in range(k)]
                         )
-                        vec = self._l2_normalize(normalized.mean(axis=0))
+                        mean = normalized.mean(axis=0)
+                        if float(np.linalg.norm(mean)) <= 1e-12:
+                            # Antipodal sub-chunks cancelled to ~zero: the mean
+                            # has no direction, so it'll fail _is_valid below and
+                            # be marked _failed. Name the chunk so it's findable.
+                            print(
+                                f"[bulk] item {cid!r}: {k} sub-chunk mean "
+                                f"collapsed to near-zero (antipodal); rejecting",
+                                file=sys.stderr,
+                            )
+                        vec = self._l2_normalize(mean)
                     idx += k
 
                     if vec is not None and self._is_valid(vec):
@@ -347,17 +392,7 @@ class BulkEmbedder:
                             )
                         done += 1
                     else:
-                        if f_out is not None:
-                            f_out.write(
-                                json.dumps(
-                                    {
-                                        "chunk_id": cid,
-                                        "embedding": zero_vec,
-                                        "_failed": True,
-                                    }
-                                )
-                                + "\n"
-                            )
+                        mark_failed(cid)
 
                 # Flush once per group, not per line.
                 if f_out is not None:
