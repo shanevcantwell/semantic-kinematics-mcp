@@ -7,6 +7,7 @@ Uses OpenAI-compatible API to connect to LM Studio for GGUF'd embedding models.
 from typing import List, Optional
 
 import numpy as np
+import requests
 
 from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
@@ -70,6 +71,35 @@ class LMStudioAdapter(EmbeddingAdapter):
     def is_loaded(self) -> bool:
         """Client is considered loaded once initialized."""
         return self._client is not None
+
+    def _tokenize_url(self) -> str:
+        """Derive the server-root ``/tokenize`` URL from the ``/v1`` base_url.
+
+        llama.cpp exposes ``/tokenize`` at the server root, not under ``/v1``.
+        """
+        root = self._base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[: -len("/v1")]
+        return f"{root.rstrip('/')}/tokenize"
+
+    def count_tokens(self, text: str) -> int:
+        """
+        Return the exact token count for ``text`` via the server's tokenizer.
+
+        POSTs to llama.cpp's ``/tokenize`` endpoint (server root, not ``/v1``),
+        which returns ``{"tokens": [...]}``; the count is the length of that
+        list. This is the real tokenizer, so the split decision no longer rests
+        on a chars-per-token fiction that undershoots on dense code/JSON.
+
+        Args:
+            text: Input text to tokenize.
+
+        Returns:
+            Exact token count.
+        """
+        response = requests.post(self._tokenize_url(), json={"content": text})
+        response.raise_for_status()
+        return len(response.json()["tokens"])
 
     def embed(self, text: str) -> np.ndarray:
         """

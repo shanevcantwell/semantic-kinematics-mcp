@@ -59,6 +59,34 @@ class EmbeddingAdapter(ABC):
         """
         return np.array([self.embed(t) for t in texts])
 
+    def count_tokens(self, text: str) -> int:
+        """
+        Count the tokens the backend's tokenizer produces for ``text``.
+
+        This is part of the adapter contract because only the backend knows
+        its own tokenizer; a chars-per-token heuristic undershoots badly on
+        dense text (code/JSON) and lets oversized inputs slip past the
+        sub-chunk splitter into server-side context overflow.
+
+        Subclasses that can reach a real tokenizer (the server's ``/tokenize``
+        endpoint, a resident HF tokenizer, etc.) must override this and return
+        an exact count. Backends with no reachable tokenizer leave the default,
+        which raises so callers fail loudly rather than splitting on a fiction.
+
+        Args:
+            text: Input text to tokenize.
+
+        Returns:
+            Exact token count.
+
+        Raises:
+            NotImplementedError: if the backend exposes no tokenizer.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement count_tokens; "
+            "token-aware splitting is unavailable for this backend."
+        )
+
     def unload(self) -> None:
         """Unload model from memory. No-op for stateless backends."""
         pass

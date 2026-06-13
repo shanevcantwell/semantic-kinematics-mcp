@@ -47,6 +47,15 @@ class FakeAdapter(EmbeddingAdapter):
             raise RuntimeError("simulated backend failure")
         return np.array([_unit_vector_for(t) for t in texts])
 
+    def count_tokens(self, text: str) -> int:
+        """Deterministic offline token count.
+
+        Mirrors the old chars/4 arithmetic so the batching tests stay legible,
+        but it is now an explicit adapter method (the BulkEmbedder calls this,
+        never a private heuristic) -- the contract issue #20 introduced.
+        """
+        return len(text) // 4 + 1
+
 
 def _is_unit(vec: np.ndarray) -> bool:
     return np.isclose(np.linalg.norm(vec), 1.0, atol=1e-6)
@@ -181,10 +190,18 @@ def test_all_ids_present_for_mixed_corpus():
 
 
 class NonUnitAdapter(FakeAdapter):
-    """Adapter that violates the unit-norm contract (scales vectors by 3)."""
+    """Adapter that violates the unit-norm contract with NON-uniform scaling.
+
+    Each returned vector in a batch is scaled by ``10 ** i`` for the i-th text,
+    so per-chunk magnitudes differ by orders of magnitude. Uniform scaling
+    (the old test's ``* 3.0``) preserves the mean's direction and so could not
+    catch the magnitude-domination bug in issue #17; non-uniform scaling can.
+    """
 
     def embed_batch(self, texts: List[str]) -> np.ndarray:
-        return super().embed_batch(texts) * 3.0
+        base = super().embed_batch(texts)
+        scales = np.array([10.0 ** i for i in range(len(texts))]).reshape(-1, 1)
+        return base * scales
 
 
 def test_single_chunk_normalized_even_with_nonunit_adapter():
@@ -193,6 +210,71 @@ def test_single_chunk_normalized_even_with_nonunit_adapter():
     result = embedder.embed_corpus([("A short sentence.", "a")])
     # k == 1 path must L2-normalize too, not store the adapter vector as-is.
     assert _is_unit(result["a"])
+
+
+def test_multichunk_averaging_is_normalize_each_then_mean(monkeypatch):
+    """#17: the reassembled direction must be the centroid of the *unit*
+    sub-chunk vectors, independent of per-chunk magnitude.
+
+    With a non-uniform-scaling adapter, averaging raw vectors would let the
+    largest-norm sub-chunk dominate the direction. The fix normalizes each
+    sub-chunk before averaging, so the result equals the direction a unit-norm
+    adapter would have produced for the same sub-chunks.
+    """
+    text = "Alpha sentence one. Beta sentence two. Gamma sentence three. Delta four."
+
+    # Force this text to split into multiple sub-chunks deterministically.
+    nonunit = NonUnitAdapter()
+    embedder = BulkEmbedder(nonunit, max_tokens_per_chunk=3, max_tokens_per_request=10_000)
+    sub_chunks = embedder._split_text(text, 3)
+    assert len(sub_chunks) > 1
+
+    result = embedder.embed_corpus([(text, "x")])
+    assert _is_unit(result["x"])
+
+    # Expected: normalize each sub-chunk's UNIT vector (scale-invariant), mean,
+    # normalize. The expected uses the unit vectors directly -- the scaling the
+    # adapter applied must wash out.
+    unit_chunks = np.array([_unit_vector_for(sc) for sc in sub_chunks])
+    expected = unit_chunks.mean(axis=0)
+    expected = expected / np.linalg.norm(expected)
+
+    np.testing.assert_allclose(result["x"], expected, atol=1e-9)
+
+
+def test_dense_text_splits_under_true_count_not_undershoot():
+    """#20: a backend whose true token count is far above chars/4 must still
+    get split so each sub-chunk fits the server's physical batch.
+
+    The DenseAdapter reports 4x the chars/4 estimate -- mimicking dense
+    code/JSON where chars/token runs ~1.1 instead of ~4. An input the old
+    chars/4 heuristic believed fit the chunk ceiling now correctly splits,
+    because BulkEmbedder asks the adapter for the true count.
+    """
+
+    class DenseAdapter(FakeAdapter):
+        def count_tokens(self, text: str) -> int:
+            # ~4x denser than chars/4: the regime that silently 500'd in #20.
+            return (len(text) // 4 + 1) * 4
+
+    adapter = DenseAdapter()
+    # Chunk ceiling 400 true tokens. A 600-char text is ~150 by chars/4 (would
+    # NOT split under the old heuristic) but ~600 true tokens here -> must split.
+    embedder = BulkEmbedder(adapter, max_tokens_per_chunk=400, max_tokens_per_request=10_000)
+    dense = ". ".join(f"token{i} dense fragment here" for i in range(25)) + "."
+
+    # Sanity: the old chars/4 estimate is under the ceiling; the true count isn't.
+    assert (len(dense) // 4 + 1) <= 400
+    assert adapter.count_tokens(dense) > 400
+
+    sub_chunks = embedder._split_text(dense, 400)
+    assert len(sub_chunks) > 1
+    # Every sub-chunk fits the true-token ceiling -> no oversized request.
+    assert all(adapter.count_tokens(sc) <= 400 for sc in sub_chunks)
+
+    result = embedder.embed_corpus([(dense, "dense")])
+    assert "dense" in result
+    assert _is_unit(result["dense"])
 
 
 def test_no_pending_work_does_not_create_checkpoint(tmp_path):
