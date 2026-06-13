@@ -247,81 +247,138 @@ from here forward should use the canonical identity string.
 
 ---
 
-## 8. Target state & spike plan (2026-06-13)
+## 8. Target state & spike plan (rev 2026-06-13)
 
-Spike shapes are derived from a defined terminal state and its dependency chain,
-so each spike reads as "de-risk *this* node/edge," not a loose investigation.
+> Supersedes the first 2026-06-13 cut, which scoped the terminal state too
+> narrowly — it treated ADR-001's `analyze_axis_alignment` tool as the
+> destination. **ADR-SKMCP-0001** (directional projection primitive, now promoted
+> into this repo at `docs/ADRs/proposed/`) shows that tool is a *waypoint*, and
+> that two destinations were chained as one. They share embedding infrastructure
+> but fork. The standing decision (2026-06-13) is **falsify-first**: the bearing
+> destination's viability is a cheap go/no-go that gates whether the expensive
+> infrastructure is worth building at all.
 
-### Terminal state (F)
+### The noise, named: two regimes (different atom, null, tool)
 
-`analyze_axis_alignment` runs against an empirical null built from the real
-thought-vault corpus and produces calibrated z-scores that separate
-axis-marching passages from the conversation baseline — strongly enough to
-promote **ADR-001 → Accepted** (canonical proof: absurdist text flares at high
-sigma against the conversation null). The entire issue ledger is scaffolding for
-*a null you can trust*. "Trust" decomposes into four properties, each a node:
+The words "projection", "axis", and "null" each named one thing in each of two
+regimes, which is what made the system feel noisy.
 
-- **Complete** — no silently dropped content (#20). A null missing its densest
-  passages is biased, not merely smaller.
-- **Correct** — direction-faithful vectors (#17). Magnitude-biased averages
-  corrupt the geometry the z-scores measure.
-- **Reproducible & self-describing** — canonical `model_name` key + provenance
-  in the artifact (#11.2 + #16).
-- **Consumable** — the null loader's guard accepts what the embedder produces
-  (the E→G edge; currently *unproven*).
+| Regime | Question | Atom | Null | Tool |
+|---|---|---|---|---|
+| **Position / rhythm** | "where does this sit / how does it drift?" | sentence (point) | **corpus-null** — where real text *sits* on the axis | ADR-001 axis-alignment; velocity/curvature (inherited) |
+| **Bearing / motion** | "which way did this *move* vs a named axis?" | **displacement** (+ anchor pair) | **measured-displacement-null** — what random *motion* looks like, given anisotropy | ADR-SKMCP-0001 projection primitive |
 
-### Dependency chain (terminal → leaves)
+The null collision is the sharp one: position-null is about where points *sit*;
+displacement-null is about whether a motion's bearing *beats chance* in a
+cone-shaped (anisotropic) space. Not interchangeable; each binds to its atom.
+Diagnosis from ADR-SKMCP-0001: the reflexive angle measures (drift cosine,
+curvature) **saturate near π/2 in high-d and discriminate nothing** — but the
+same dimensionality *sharpens* a referential projection against a fixed axis.
+That asymmetry is why the bearing regime is the real instrument and the
+velocity/curvature layer is the rhythm-regime fossil.
+
+### Two destinations (shared infra base, forked goals)
+
+- **Dest 1 — map the thought-vault corpus** (position regime): drift/position
+  over the personal corpus; ADR-001 corpus-null; **needs the full vault embedded
+  at scale** → infra-heavy (#11, #16, #17, #20, resolver).
+- **Dest 2 — measure behavioral axes directionally** (bearing regime; escalation
+  → semantic-forge judge calibration): ADR-SKMCP-0001 projection; the axis comes
+  from a curated **anchor grid, not the vault**; calibration data is model
+  completions, **not the vault**. Needs almost none of the at-scale infra.
+
+**Dest 2 leads.** Spikes A→B are go/no-go gates on the whole bearing enterprise
+and cost almost nothing (anchor texts + current embedder + numpy). Industrialize
+the vault embed (Dest 1) only with confidence the signal exists — fail loud and
+fast first.
+
+### Dependency shape
 
 ```
-F  analyze_axis_alignment validated → ADR-001 Accepted
-└─ N  null cache built (build_axis_null.py)
-   ├─ G  null loader/guard accepts canonical-keyed, right-dim vectors   ◄── Spike 2 proves this edge
-   └─ E  corpus embedded: complete · correct · canonical-keyed
-      ├─ #20  pre-count via /tokenize → no dropped dense content        ◄── Spike 1 de-risks this node
-      ├─ #17  normalize-before-average → faithful direction
-      ├─ #16  self-describing checkpoint → provenance + safe resume
-      ├─ #11.2 canonical model_name → null-cache eligibility
-      └─ R  resolver seam (#2 / #14 / #15): (model_name, base_url)→adapter,
-            no defaults, hard fail, env fallback  ◄── #11.2 attaches here; shared with the MCP-tool path
-   (corpus supply — cross-repo:)
-   └─ #11.1 adapter generalized · #11.3 normalization declared
-      └─ #11.4 vault cutover (no shim) → vault #28 re-embed → vault #29 reproducible config
+SHARED INFRA BASE:  resolver(#2/#14/#15) · #16 · #17 · #20(Spike C) · #11
+  ├─ Dest 1 (vault mapping):    base → corpus embed at scale → ADR-001 corpus-null
+  │                             → drift/position analysis
+  └─ Dest 2 (behavioral axis):  [Spike A] escalation-axis SVD → [Spike B] projection
+                                + measured-displacement-null → ADR-SKMCP-0001 implemented
+                                → semantic-forge judge calibration
+                                (needs almost none of the base; A/B run NOW on current tooling)
 ```
 
-Off the critical line to F (real, parallelizable): **#9** (UI/MCP contract, needs
-#2's param shape); **llauncher #155** (gates only the *nv_embed* null path — the
-embeddinggemma path does not need it).
+Off both critical lines (parallelizable): **#9** (UI/MCP contract, needs #2's
+param shape); **llauncher #155** (gates only the nv_embed path).
 
-### Spike 1 — Corpus tokenization calibration (de-risks #20; gates #3)
+### Spike A — Escalation-axis dimensionality (union SVD) — *bearing; falsify-first; prereq for B*
 
-Critical-path leaf, zero upstream deps → runs now. Measurement-shaped: mechanism
-is already proven (`/tokenize` on :8082 returns exact counts; `n_ctx`=2048 hard
-ceiling; dense code ≈1.13 chars/tok vs the chars÷4 assumption). Residual unknowns
-are corpus-level: token distribution over a real sample, what fraction exceeds
-2048 (needs splitting), whether the sentence-splitter's output actually fits
-after splitting (worst case: a boundary-less 2048+-token blob hard-split by
-chars), and the throughput cost of one `/tokenize` round-trip per text at ~39K
-scale vs the 45-min budget. **Output:** exact #20 fix shape (pre-count vs
-rejection-retry vs both), corpus-calibrated `max_tokens_per_chunk`, throughput
-verdict — so the #3 timed run can't silently drop content.
+**Question:** is escalation one coherent direction or three separable axes
+(tone/urgency/importance)? Until this resolves, "project onto the escalation
+axis" has no defined target.
+**Precondition (open input):** an escalation **anchor grid** — level↔escalated
+phrasing pairs across the three sub-axes + mood variants. *Not locatable in the
+ecosystem as of 2026-06-13* (grep hit mood/cathedral docs, no anchor-set
+artifact). Spike A's first checkpoint is **locate-or-author the grid.**
+**Method:** embed the grid in ONE embedder (embeddinggemma :8082 first); form
+delta vectors (escalated − level); SVD; read the singular-value spectrum. Repeat
+on a second embedder to test stability.
+**Fail loud / kill criteria:**
+- Flat spectrum / no dominant direction → escalation isn't a linear axis here → **STOP**.
+- "Two strong + one marginal" → per the ADR's own honesty rule this is
+  **UNRESOLVED, not a finding** → do not build on an ambiguous axis.
+- Coarse structure disagrees across embedders → result is embedder-captive →
+  that *is* the finding, and it gates the whole bearing enterprise.
+**Output:** number of coherent axes + coarse-vs-marginal honesty call +
+embedder-stability verdict. Go/no-go for Spike B. *Needs none of the infra base.*
 
-### Spike 2 — Null-cache eligibility, end-to-end (de-risks the E→G junction)
+### Spike B — Projection primitive + measured-displacement-null — *bearing; depends on A*
 
-Critical-path junction, de-riskable with **hand-faked inputs** — does not need
-real #11.2/#16/R. Integration-proof-shaped: embed a handful of real vault chunks
-with a *proto* canonical `model_name` and a *proto* self-describing checkpoint
-header, run through `build_axis_null.py` / the null loader, confirm the
-`model_name` guard accepts it and dimensions align. Surfaces any guard-string,
-manifest-schema, or dimension mismatch *now*, before the expensive full embed.
-**Output:** proof the central promise holds at tiny scale; concrete proto-shapes
-that *design* #16, #11.2, and R.
+**Question:** does projecting a displacement onto the validated axis produce
+signal that clears a measured null — i.e. does the instrument detect escalation
+at all?
+**Method:** implement the primitive (displacement → signed component, orthogonal
+residual, cosine alignment); build the null by **resampling real-text
+displacement deltas** projected onto the axis (mean/std) — *measured, not 1/√d*,
+to inherit the space's anisotropy; project known escalated-vs-level test
+displacements; compute sigma above null.
+**Fail loud / kill criteria:**
+- Known-escalated displacements don't separate from the null at meaningful sigma
+  → the instrument doesn't detect its target → **STOP**.
+- Large residual on known-escalated (motion mostly orthogonal to the axis) → the
+  axis isn't capturing escalation → re-derive the axis (back to A).
+- Null so wide nothing clears it → anisotropy defeats the measurement in this
+  embedder → loud fail; reconsider embedder (A's embedder-choice finding).
+**Output:** signed-component-vs-null sigma for known cases; validated null
+protocol; go/no-go on the primitive → whether ADR-SKMCP-0001 graduates from
+proposed toward implemented. *Still needs none of the at-scale infra.*
+
+### Spike C — Tokenization calibration — *infra; = former Spike 1; #20*
+
+Unchanged (see §7 / #20). Gates Dest 1's at-scale embed; **independent of A/B**.
+Mechanism proven via the `/tokenize` probe; residual unknowns are corpus-level
+distribution + pre-count throughput at ~39K scale.
+
+### Spike D — Eligibility, regime-typed — *infra; = former Spike 2, reframed*
+
+The hand-faked end-to-end proof against `build_axis_null.py`, but now it must
+declare **which null** (corpus vs measured-displacement) and **which atom**
+(sentence vs displacement) it validates — and the #16 checkpoint header must
+record **regime + atom + embedder**, not just `model_name`. The reframing forces
+the two-null distinction into the artifact so the regimes stop tangling.
 
 ### What is implementation, not spike
 
 R (resolver seam, #2/#14/#15), #17 (normalize-before-average + non-uniform-scale
-regression test), and #11 are execution — their shape is known, waiting only on a
-spike finding (R's canonical-string format ← Spike 2) or direct work. The only
-genuine critical-path *unknowns* are the two nodes the spikes target.
+regression test), and #11 are execution — shape known, waiting on a spike finding
+(R's canonical-string format ← Spike D) or direct work.
 
-**Sequence:** Spike 1 → Spike 2 → (R + #17 + #16 + #11.2 informed by spikes) →
-real #3 run → #11 migration / vault cutover → null build → ADR-001 validation.
+### Numbering note
+
+ADR-SKMCP-0001 keeps its `SKMCP-NNNN` identity in this repo (cross-repo refs
+depend on it) rather than renumbering to local `ADR-004`; the `ADR-00N` vs
+`ADR-SKMCP-NNNN` reconciliation is the one open ADR-numbering thread.
+
+### Sequence
+
+**[Spike A] → [Spike B]** (falsify-fast, now, current tooling) → go/no-go on the
+bearing destination. The infra track (Spike C, D, then #17/#16/#11.2/R) proceeds
+for Dest 1 **in parallel only to the extent vault-mapping has independent
+value** — otherwise it waits on A/B confidence rather than industrializing an
+unproven measurement.
