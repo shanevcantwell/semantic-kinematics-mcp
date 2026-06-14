@@ -1,0 +1,175 @@
+# Escalation anchor grid — DRAFT v1 (2026-06-13, Shane-accepted draft)
+# =============================================================================
+# EPISTEMIC STATUS (read first — this is load-bearing, not boilerplate):
+#   This grid is an UNVALIDATED instrument. It has NO way yet to qualify its own
+#   accuracy, and it does NOT know what it actually measures. The labels "tone",
+#   "urgency", "importance" are the EXPERIMENTER'S HYPOTHESIS about what each pair
+#   set isolates — they are NOT established facts about the directions the SVD will
+#   recover. Whatever axis the deltas span is whatever this specific set of English
+#   sentences, through this specific embedder, happens to span. That may or may not
+#   correspond to "escalation" in any sense that transfers. The spikes interrogate
+#   this grid; they do not confirm it. Any result that reads as "the grid measures
+#   escalation" is over-claiming until cross-embedder agreement + an external
+#   criterion (not yet built) say otherwise. Treat the grid as a question, not a ruler.
+#
+# Purpose: input for Spike A (escalation-axis union SVD) and Spike B (projection).
+# The escalation hypothesis (ADR-SKMCP-0001) holds escalation as THREE candidate
+# axes — tone, urgency, importance — as an anchor TO DISPROVE. Spike A's SVD on
+# the stacked (escalated - level) delta vectors tells us whether these are one
+# collapsed manifold or genuinely separable directions.
+#
+# HOW THE AXIS IS DEFINED (ADR-SKMCP-0001):
+#   axis direction = mean of (embed(escalated) - embed(level)) over a pair set,
+#   single embedder, displacement = escalated - level.
+#
+# DESIGN DISCIPLINE (the part that decides whether the SVD means anything):
+#   1. CONTENT HELD CONSTANT within a pair. level and escalated say the SAME
+#      thing; only the escalation register differs. If a pair smuggles a topic
+#      change into the delta, the delta encodes topic, not escalation.
+#   2. AXES LEXICALLY ISOLATED. Each axis is escalated through a DIFFERENT lever:
+#        tone       = affective loading / bluntness / hostility (NOT magnitude)
+#        urgency    = time pressure / immediacy (NOT affect, NOT stakes)
+#        importance = stakes / significance / consequence (NOT affect, NOT time)
+#      The point: if the SVD collapses them anyway, that's an EMBEDDING-SPACE
+#      finding. If the anchors themselves conflate the levers, the SVD only
+#      rediscovers my sloppiness. So isolation is the thing to scrutinize hardest.
+#   3. VARIED BASE CONTENT across pairs so the axis generalizes, not encodes one topic.
+#
+# >>> REVIEW FLAGS for Shane (where this draft is weakest) <<<
+#   [A] LENGTH CONFOUND: escalated text (esp. urgency) tends longer; the delta
+#       then partly encodes "more tokens." I tried to length-match. Check it, or
+#       add length-matched controls.
+#   [B] REGISTER CAPTURE: every pair here is workplace/technical English. The axis
+#       may be genre-captive and not transfer to the actual corpus (chat logs,
+#       books, speeches). Decide whether to add register variants.
+#   [C] ISOLATION LEAKAGE: I flag specific suspect pairs inline with `# leak?`.
+#       These are the ones most likely to entangle two levers.
+#   [D] COUNT: ~8 pairs/axis is a floor for a rough SVD. More pairs => more
+#       stable singular values, especially for the marginal-third-axis question.
+#   [E] Run the SVD on TWO embedders (embeddinggemma-300M-F32 :8082 + one other).
+#       Coarse structure (how many dominant dirs) is trustworthy; a marginal third
+#       axis that flips across embedders is UNRESOLVED, not a finding.
+
+tone:        # affective register / bluntness, at constant stakes + timeframe
+  - id: tone-01
+    base: a colleague's change broke the build
+    level: "The recent change appears to have broken the build."
+    escalated: "Your change broke the build. Again."
+  - id: tone-02
+    base: disagreement on an approach
+    level: "I see this differently."
+    escalated: "No. You're wrong about this."
+  - id: tone-03
+    base: an unanswered message
+    level: "I haven't heard back yet."
+    escalated: "I'm being ignored, apparently."
+  - id: tone-04
+    base: feedback on a draft
+    level: "I'd reconsider a few things here."
+    escalated: "Frankly, this needs serious rework."
+  - id: tone-05
+    base: a numerical error
+    level: "The numbers don't seem to add up."
+    escalated: "These numbers are just sloppy."
+  - id: tone-06
+    base: doubt about a plan's durability
+    level: "I'm not convinced this will hold."
+    escalated: "This isn't going to hold, and we both know it."
+  - id: tone-07
+    base: a recurring mistake
+    level: "This has come up before."
+    escalated: "We keep doing this, and it's maddening."
+  - id: tone-08
+    base: a decision one disagrees with
+    level: "I'd have approached it differently."
+    escalated: "That was the wrong call."
+
+urgency:     # time pressure / immediacy, at neutral tone + constant stakes
+  - id: urg-01
+    base: a request to review something
+    level: "Take a look when you have a chance."
+    escalated: "Take a look right now, please."     # length-matched
+  - id: urg-02
+    base: when an item gets handled
+    level: "We can address this next sprint."
+    escalated: "We have to address this today."
+  - id: urg-03
+    base: timing of a code review
+    level: "There's no rush on the review."
+    escalated: "The review can't wait an hour."
+  - id: urg-04
+    base: when to settle a question
+    level: "Let's revisit this sometime soon."
+    escalated: "Let's settle this before end of day."
+  - id: urg-05
+    base: response timing
+    level: "Feel free to respond whenever."
+    escalated: "Respond the moment you see this."
+  - id: urg-06
+    base: when a migration starts
+    level: "We'll get to the migration eventually."
+    escalated: "We start the migration immediately."
+  - id: urg-07
+    base: the deadline
+    level: "The deadline is flexible."
+    escalated: "The deadline is now, and firm."
+  - id: urg-08
+    base: when to merge
+    level: "You can merge this later."
+    escalated: "Merge this before anything else."
+
+importance:  # stakes / significance / consequence, at neutral tone + unstated timeframe
+  - id: imp-01
+    base: how much a detail matters
+    level: "This is a small detail."
+    escalated: "This is a critical issue."
+  - id: imp-02
+    base: the weight of a note
+    level: "It's a minor note."
+    escalated: "It's a defining decision."
+  - id: imp-03
+    base: how much rides on something
+    level: "This barely matters."
+    escalated: "Everything depends on this."
+  - id: imp-04
+    base: requirement status
+    level: "A nice-to-have, nothing more."
+    escalated: "A hard requirement, non-negotiable."
+  - id: imp-05
+    base: where a point sits in the argument
+    level: "This is a side point."
+    escalated: "This is the central problem."
+  - id: imp-06
+    base: the level of stakes
+    level: "Low stakes either way."
+    escalated: "The stakes here are enormous."
+  - id: imp-07
+    base: the nature of a concern
+    level: "A cosmetic concern."
+    escalated: "A foundational concern."
+  - id: imp-08
+    base: project impact
+    level: "It won't move the needle."
+    escalated: "It will make or break the project."   # leak? "make or break" carries affect — possible tone bleed
+
+# Cross-axis validation set (ADR open-question: "does 'yelling' direction-from-
+# imperative align with the tone axis?"). NOT part of the three axes — these are
+# independently-defined mood directions to PROJECT onto the fitted axes and see
+# what aligns with what. Keeps the separability test honest.
+mood_variants:
+  - id: mood-yelling
+    direction: imperative -> shouted
+    level: "Close the door."
+    escalated: "CLOSE THE DOOR!"                       # tests tone-axis alignment; also a CASING confound — flag
+  - id: mood-contempt
+    direction: neutral -> contemptuous
+    level: "He made that choice."
+    escalated: "He made that choice, the fool."
+  - id: mood-anxiety
+    direction: neutral -> anxious
+    level: "The results are coming in."
+    escalated: "God, the results are coming in."
+  - id: mood-enthusiasm
+    direction: neutral -> elated
+    level: "We finished the feature."
+    escalated: "We absolutely crushed this feature!"

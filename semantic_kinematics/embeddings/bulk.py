@@ -36,25 +36,39 @@ class BulkEmbedder:
     Resumable, batched bulk embedder over an :class:`EmbeddingAdapter`.
 
     Args:
-        adapter: The embedding backend. Must produce unit (L2-normalized)
-            vectors of dimension ``adapter.dimensions``.
+        adapter: The embedding backend. Sub-chunk vectors are L2-normalized
+            before averaging, so the adapter need not return unit vectors; the
+            stored direction is independent of the adapter's normalization.
         max_tokens_per_request: Token budget per ``embed_batch`` call. Sub-chunks
             are accumulated across texts until this budget is reached, then one
             batched call is issued. Keep under the server's batch_size with
             headroom.
         max_tokens_per_chunk: A single text is split into sub-chunks only if its
-            estimated tokens exceed this. Keep under the server's ctx_size with
-            headroom. Most texts fall under this and pass through whole.
+            true token count (``adapter.count_tokens``) exceeds this. Keep under
+            the server's physical batch / ctx ceiling with headroom so a single
+            sub-chunk always fits. Most texts fall under this and pass through
+            whole.
         checkpoint_path: Optional JSONL path for crash-resume. If it exists it is
             loaded on ``embed_corpus`` and appended to as groups complete.
+
+    Token knobs (derived against embeddinggemma-300M-F32 on llama.cpp, where the
+    physical batch == n_ctx == 2048 *actual* tokens):
+
+    - ``max_tokens_per_chunk=1800`` -- ~250 tokens of headroom under the 2048
+      hard ceiling, so a single sub-chunk that counts at <=1800 true tokens
+      always fits one request. (The old default of 1500 only had headroom under
+      the chars/4 estimate that issue #20 showed undershoots ~3.5x on dense
+      code/JSON, letting 5000+-token inputs slip through unsplit and 500.)
+    - ``max_tokens_per_request=2000`` -- a packed batch stays at/under the 2048
+      physical batch; an over-budget single item is still sent as its own group.
     """
 
     def __init__(
         self,
         adapter: EmbeddingAdapter,
         *,
-        max_tokens_per_request: int = 3000,
-        max_tokens_per_chunk: int = 1500,
+        max_tokens_per_request: int = 2000,
+        max_tokens_per_chunk: int = 1800,
         checkpoint_path: Optional[str] = None,
     ):
         self.adapter = adapter
@@ -66,24 +80,57 @@ class BulkEmbedder:
     # Token estimation and splitting
     # ------------------------------------------------------------------
 
-    def _estimate_tokens(self, text: str) -> int:
-        """Heuristic token count: ~4 chars per token."""
-        return len(text) // 4 + 1
+    def _count_tokens(self, text: str) -> int:
+        """True token count from the adapter's own tokenizer.
+
+        Delegates to ``adapter.count_tokens``; there is no chars-per-token
+        fallback by design (issue #20) -- a backend with no reachable tokenizer
+        raises ``NotImplementedError`` so the split decision never rests on a
+        fiction that silently drops dense content.
+        """
+        return self.adapter.count_tokens(text)
+
+    def _hard_split_by_tokens(self, text: str, max_tokens: int) -> List[str]:
+        """Char-split an oversized atomic sentence so each piece fits ``max_tokens``.
+
+        We don't know the chars/token ratio for dense content a priori (that was
+        the whole #20 failure), so we bisect on character length and verify each
+        candidate piece against the real tokenizer, shrinking until it fits.
+        """
+        pieces: List[str] = []
+        remaining = text
+        while remaining:
+            if self._count_tokens(remaining) <= max_tokens:
+                pieces.append(remaining)
+                break
+            # Find the largest char prefix that fits max_tokens true tokens.
+            lo, hi = 1, len(remaining)
+            best = 1
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                if self._count_tokens(remaining[:mid]) <= max_tokens:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            pieces.append(remaining[:best])
+            remaining = remaining[best:]
+        return pieces
 
     def _split_text(self, text: str, max_tokens: int) -> List[str]:
         """
-        Split ``text`` into sub-chunks each estimated at <= ``max_tokens`` tokens.
+        Split ``text`` into sub-chunks each at <= ``max_tokens`` *true* tokens.
 
-        Packs whole sentences greedily; any single sentence that is itself over
-        the limit is hard-split by characters. Never returns an empty list for
+        Packs whole sentences greedily against the adapter's real tokenizer; any
+        single sentence that is itself over the limit is hard-split by characters
+        (verified against the tokenizer). Never returns an empty list for
         non-empty input.
         """
         if not text.strip():
             return [text]
-        if self._estimate_tokens(text) <= max_tokens:
+        if self._count_tokens(text) <= max_tokens:
             return [text]
 
-        max_chars = max(1, max_tokens * 4)
         sentences = [s for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s]
 
         sub_chunks: List[str] = []
@@ -96,17 +143,14 @@ class BulkEmbedder:
                 current = ""
 
         for sentence in sentences:
-            if self._estimate_tokens(sentence) > max_tokens:
-                # Oversized single sentence: flush, then hard char-split it.
+            if self._count_tokens(sentence) > max_tokens:
+                # Oversized single sentence: flush, then hard token-split it.
                 flush()
-                for start in range(0, len(sentence), max_chars):
-                    piece = sentence[start:start + max_chars]
-                    if piece:
-                        sub_chunks.append(piece)
+                sub_chunks.extend(self._hard_split_by_tokens(sentence, max_tokens))
                 continue
 
             candidate = sentence if not current else current + " " + sentence
-            if current and self._estimate_tokens(candidate) > max_tokens:
+            if current and self._count_tokens(candidate) > max_tokens:
                 flush()
                 current = sentence
             else:
@@ -213,41 +257,76 @@ class BulkEmbedder:
             # Nothing to embed: leave the checkpoint file untouched.
             return completed
 
-        # Precompute sub-chunks + token cost per pending text once.
-        prepared: List[Tuple[str, List[str], int]] = []
-        for text, cid in pending:
-            sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
-            cost = sum(self._estimate_tokens(sc) for sc in sub_chunks)
-            if cost > self.max_tokens_per_request:
-                print(
-                    f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
-                    f"exceeds per-request budget {self.max_tokens_per_request};"
-                    f" it will be sent as its own over-budget group",
-                    file=sys.stderr,
-                )
-            prepared.append((cid, sub_chunks, cost))
-
-        # Group into request-batches by max_tokens_per_request.
-        groups: List[List[Tuple[str, List[str]]]] = []
-        current: List[Tuple[str, List[str]]] = []
-        current_tokens = 0
-        for cid, sub_chunks, cost in prepared:
-            if current and current_tokens + cost > self.max_tokens_per_request:
-                groups.append(current)
-                current = []
-                current_tokens = 0
-            current.append((cid, sub_chunks))
-            current_tokens += cost
-        if current:
-            groups.append(current)
-
         f_out = None
         start_time = time.time()
         done = skipped
 
+        def mark_failed(cid: str) -> None:
+            """Write a ``_failed`` marker for ``cid`` so resume retries it.
+
+            Same checkpoint mechanism the embed-batch failure path uses: a
+            permanently-failed item is recorded with a zero vector and the
+            ``_failed`` flag, never silently dropped, so an idempotent
+            re-invocation picks it back up.
+            """
+            if f_out is not None:
+                f_out.write(
+                    json.dumps(
+                        {
+                            "chunk_id": cid,
+                            "embedding": zero_vec,
+                            "_failed": True,
+                        }
+                    )
+                    + "\n"
+                )
+
         try:
             if self.checkpoint_path:
                 f_out = open(self.checkpoint_path, "a")
+
+            # Precompute sub-chunks + token cost per pending text once. A
+            # count_tokens/_split_text failure for ONE item marks just that
+            # item _failed and continues -- symmetric with the embed-batch
+            # failure path below -- rather than aborting the whole run and
+            # losing already-completed work with no resumable marker.
+            prepared: List[Tuple[str, List[str], int]] = []
+            for text, cid in pending:
+                try:
+                    sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
+                    cost = sum(self._count_tokens(sc) for sc in sub_chunks)
+                except Exception as exc:  # noqa: BLE001 -- isolate per item.
+                    print(
+                        f"[bulk] preparation (tokenize/split) failed for item "
+                        f"{cid!r} ({exc}); marking _failed and continuing",
+                        file=sys.stderr,
+                    )
+                    mark_failed(cid)
+                    continue
+                if cost > self.max_tokens_per_request:
+                    print(
+                        f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
+                        f"exceeds per-request budget {self.max_tokens_per_request};"
+                        f" it will be sent as its own over-budget group",
+                        file=sys.stderr,
+                    )
+                prepared.append((cid, sub_chunks, cost))
+            if f_out is not None:
+                f_out.flush()
+
+            # Group into request-batches by max_tokens_per_request.
+            groups: List[List[Tuple[str, List[str]]]] = []
+            current: List[Tuple[str, List[str]]] = []
+            current_tokens = 0
+            for cid, sub_chunks, cost in prepared:
+                if current and current_tokens + cost > self.max_tokens_per_request:
+                    groups.append(current)
+                    current = []
+                    current_tokens = 0
+                current.append((cid, sub_chunks))
+                current_tokens += cost
+            if current:
+                groups.append(current)
 
             for group in groups:
                 # Flatten all sub-chunks across the group into one batch call.
@@ -276,11 +355,30 @@ class BulkEmbedder:
                     if group_failed or embeddings is None:
                         vec = None
                     elif k == 1:
-                        # Normalize single sub-chunk vectors too, so all stored
-                        # embeddings are unit-norm regardless of adapter behavior.
+                        # Single sub-chunk: exact passthrough up to L2-normalize,
+                        # so all stored embeddings are unit-norm regardless of
+                        # adapter behavior.
                         vec = self._l2_normalize(embeddings[idx])
                     else:
-                        vec = self._l2_normalize(embeddings[idx:idx + k].mean(axis=0))
+                        # Direction centroid (#17): L2-normalize EACH sub-chunk
+                        # before averaging so larger-norm sub-chunks can't
+                        # magnitude-dominate the direction, then normalize the
+                        # mean. Independent of whether the adapter returns unit
+                        # vectors.
+                        normalized = np.array(
+                            [self._l2_normalize(embeddings[idx + j]) for j in range(k)]
+                        )
+                        mean = normalized.mean(axis=0)
+                        if float(np.linalg.norm(mean)) <= 1e-12:
+                            # Antipodal sub-chunks cancelled to ~zero: the mean
+                            # has no direction, so it'll fail _is_valid below and
+                            # be marked _failed. Name the chunk so it's findable.
+                            print(
+                                f"[bulk] item {cid!r}: {k} sub-chunk mean "
+                                f"collapsed to near-zero (antipodal); rejecting",
+                                file=sys.stderr,
+                            )
+                        vec = self._l2_normalize(mean)
                     idx += k
 
                     if vec is not None and self._is_valid(vec):
@@ -294,17 +392,7 @@ class BulkEmbedder:
                             )
                         done += 1
                     else:
-                        if f_out is not None:
-                            f_out.write(
-                                json.dumps(
-                                    {
-                                        "chunk_id": cid,
-                                        "embedding": zero_vec,
-                                        "_failed": True,
-                                    }
-                                )
-                                + "\n"
-                            )
+                        mark_failed(cid)
 
                 # Flush once per group, not per line.
                 if f_out is not None:

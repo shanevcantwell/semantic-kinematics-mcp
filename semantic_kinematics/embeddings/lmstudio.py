@@ -7,6 +7,7 @@ Uses OpenAI-compatible API to connect to LM Studio for GGUF'd embedding models.
 from typing import List, Optional
 
 import numpy as np
+import requests
 
 from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
@@ -70,6 +71,45 @@ class LMStudioAdapter(EmbeddingAdapter):
     def is_loaded(self) -> bool:
         """Client is considered loaded once initialized."""
         return self._client is not None
+
+    def _tokenize_url(self) -> str:
+        """Derive the server-root ``/tokenize`` URL from the ``/v1`` base_url.
+
+        llama.cpp exposes ``/tokenize`` at the server root, not under ``/v1``.
+        """
+        # Assumes ``/v1`` is the terminal path component of base_url (the
+        # OpenAI-compatible convention); only that trailing segment is stripped.
+        root = self._base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[: -len("/v1")]
+        return f"{root.rstrip('/')}/tokenize"
+
+    def count_tokens(self, text: str) -> int:
+        """
+        Return the exact token count for ``text`` via the server's tokenizer.
+
+        POSTs to llama.cpp's ``/tokenize`` endpoint (server root, not ``/v1``),
+        which returns ``{"tokens": [...]}``; the count is the length of that
+        list. This is the real tokenizer, so the split decision no longer rests
+        on a chars-per-token fiction that undershoots on dense code/JSON.
+
+        Args:
+            text: Input text to tokenize.
+
+        Returns:
+            Exact token count.
+        """
+        response = requests.post(self._tokenize_url(), json={"content": text})
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or "tokens" not in payload:
+            body = repr(payload)
+            if len(body) > 500:
+                body = body[:500] + "...(truncated)"
+            raise ValueError(
+                f"/tokenize returned 200 but no 'tokens' field; body={body}"
+            )
+        return len(payload["tokens"])
 
     def embed(self, text: str) -> np.ndarray:
         """

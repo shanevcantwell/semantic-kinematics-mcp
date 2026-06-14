@@ -47,6 +47,15 @@ class FakeAdapter(EmbeddingAdapter):
             raise RuntimeError("simulated backend failure")
         return np.array([_unit_vector_for(t) for t in texts])
 
+    def count_tokens(self, text: str) -> int:
+        """Deterministic offline token count.
+
+        Mirrors the old chars/4 arithmetic so the batching tests stay legible,
+        but it is now an explicit adapter method (the BulkEmbedder calls this,
+        never a private heuristic) -- the contract issue #20 introduced.
+        """
+        return len(text) // 4 + 1
+
 
 def _is_unit(vec: np.ndarray) -> bool:
     return np.isclose(np.linalg.norm(vec), 1.0, atol=1e-6)
@@ -181,10 +190,18 @@ def test_all_ids_present_for_mixed_corpus():
 
 
 class NonUnitAdapter(FakeAdapter):
-    """Adapter that violates the unit-norm contract (scales vectors by 3)."""
+    """Adapter that violates the unit-norm contract with NON-uniform scaling.
+
+    Each returned vector in a batch is scaled by ``10 ** i`` for the i-th text,
+    so per-chunk magnitudes differ by orders of magnitude. Uniform scaling
+    (the old test's ``* 3.0``) preserves the mean's direction and so could not
+    catch the magnitude-domination bug in issue #17; non-uniform scaling can.
+    """
 
     def embed_batch(self, texts: List[str]) -> np.ndarray:
-        return super().embed_batch(texts) * 3.0
+        base = super().embed_batch(texts)
+        scales = np.array([10.0 ** i for i in range(len(texts))]).reshape(-1, 1)
+        return base * scales
 
 
 def test_single_chunk_normalized_even_with_nonunit_adapter():
@@ -193,6 +210,71 @@ def test_single_chunk_normalized_even_with_nonunit_adapter():
     result = embedder.embed_corpus([("A short sentence.", "a")])
     # k == 1 path must L2-normalize too, not store the adapter vector as-is.
     assert _is_unit(result["a"])
+
+
+def test_multichunk_averaging_is_normalize_each_then_mean(monkeypatch):
+    """#17: the reassembled direction must be the centroid of the *unit*
+    sub-chunk vectors, independent of per-chunk magnitude.
+
+    With a non-uniform-scaling adapter, averaging raw vectors would let the
+    largest-norm sub-chunk dominate the direction. The fix normalizes each
+    sub-chunk before averaging, so the result equals the direction a unit-norm
+    adapter would have produced for the same sub-chunks.
+    """
+    text = "Alpha sentence one. Beta sentence two. Gamma sentence three. Delta four."
+
+    # Force this text to split into multiple sub-chunks deterministically.
+    nonunit = NonUnitAdapter()
+    embedder = BulkEmbedder(nonunit, max_tokens_per_chunk=3, max_tokens_per_request=10_000)
+    sub_chunks = embedder._split_text(text, 3)
+    assert len(sub_chunks) > 1
+
+    result = embedder.embed_corpus([(text, "x")])
+    assert _is_unit(result["x"])
+
+    # Expected: normalize each sub-chunk's UNIT vector (scale-invariant), mean,
+    # normalize. The expected uses the unit vectors directly -- the scaling the
+    # adapter applied must wash out.
+    unit_chunks = np.array([_unit_vector_for(sc) for sc in sub_chunks])
+    expected = unit_chunks.mean(axis=0)
+    expected = expected / np.linalg.norm(expected)
+
+    np.testing.assert_allclose(result["x"], expected, atol=1e-9)
+
+
+def test_dense_text_splits_under_true_count_not_undershoot():
+    """#20: a backend whose true token count is far above chars/4 must still
+    get split so each sub-chunk fits the server's physical batch.
+
+    The DenseAdapter reports 4x the chars/4 estimate -- mimicking dense
+    code/JSON where chars/token runs ~1.1 instead of ~4. An input the old
+    chars/4 heuristic believed fit the chunk ceiling now correctly splits,
+    because BulkEmbedder asks the adapter for the true count.
+    """
+
+    class DenseAdapter(FakeAdapter):
+        def count_tokens(self, text: str) -> int:
+            # ~4x denser than chars/4: the regime that silently 500'd in #20.
+            return (len(text) // 4 + 1) * 4
+
+    adapter = DenseAdapter()
+    # Chunk ceiling 400 true tokens. A 600-char text is ~150 by chars/4 (would
+    # NOT split under the old heuristic) but ~600 true tokens here -> must split.
+    embedder = BulkEmbedder(adapter, max_tokens_per_chunk=400, max_tokens_per_request=10_000)
+    dense = ". ".join(f"token{i} dense fragment here" for i in range(25)) + "."
+
+    # Sanity: the old chars/4 estimate is under the ceiling; the true count isn't.
+    assert (len(dense) // 4 + 1) <= 400
+    assert adapter.count_tokens(dense) > 400
+
+    sub_chunks = embedder._split_text(dense, 400)
+    assert len(sub_chunks) > 1
+    # Every sub-chunk fits the true-token ceiling -> no oversized request.
+    assert all(adapter.count_tokens(sc) <= 400 for sc in sub_chunks)
+
+    result = embedder.embed_corpus([(dense, "dense")])
+    assert "dense" in result
+    assert _is_unit(result["dense"])
 
 
 def test_no_pending_work_does_not_create_checkpoint(tmp_path):
@@ -268,6 +350,101 @@ def test_split_never_empty_for_nonempty_input():
     assert len(chunks) > 1
     assert all(c for c in chunks)
     assert "".join(chunks) == blob
+
+
+def test_hard_split_bisect_on_runon_input_terminates_under_ceiling():
+    """_hard_split_by_tokens must bisect a single run-on input that has NO
+    sentence-boundary punctuation into pieces each <= the ceiling, and the
+    bisection must terminate.
+
+    The DenseAdapter reports ~1 token/char so a punctuation-free run-on of
+    plain characters has a true token count well over the ceiling; with no
+    boundary to split on, _split_text falls through to _hard_split_by_tokens
+    which bisects on character length against the real tokenizer.
+    """
+
+    class DenseAdapter(FakeAdapter):
+        def count_tokens(self, text: str) -> int:
+            # ~1 token/char: a punctuation-free blob blows past the ceiling.
+            return max(1, len(text))
+
+    adapter = DenseAdapter()
+    ceiling = 20
+    embedder = BulkEmbedder(
+        adapter, max_tokens_per_chunk=ceiling, max_tokens_per_request=10_000
+    )
+    # No ., !, ?, or newline anywhere -> one atomic "sentence" far over ceiling.
+    runon = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+    assert adapter.count_tokens(runon) > ceiling
+
+    pieces = embedder._hard_split_by_tokens(runon, ceiling)
+    assert len(pieces) > 1
+    # Every piece fits the true-token ceiling and the bisect terminated.
+    assert all(adapter.count_tokens(p) <= ceiling for p in pieces)
+    # Lossless reassembly.
+    assert "".join(pieces) == runon
+
+    # End-to-end through _split_text (no boundary -> hits the hard-split path).
+    sub_chunks = embedder._split_text(runon, ceiling)
+    assert len(sub_chunks) > 1
+    assert all(adapter.count_tokens(sc) <= ceiling for sc in sub_chunks)
+
+    result = embedder.embed_corpus([(runon, "runon")])
+    assert "runon" in result
+    assert _is_unit(result["runon"])
+
+
+def test_count_tokens_failure_during_prep_marks_item_failed_and_continues(tmp_path):
+    """Blocker gate: a count_tokens failure for ONE item during preparation
+    must mark THAT item _failed in the checkpoint, still embed the others,
+    write a resumable checkpoint, and NOT propagate the exception.
+
+    Fails against the pre-fix code (prep ran outside the try, so the raise
+    aborted the whole run with no _failed marker); passes after the fix.
+    """
+
+    class PrepFailAdapter(FakeAdapter):
+        def count_tokens(self, text: str) -> int:
+            if text == "boom":
+                raise RuntimeError("simulated /tokenize failure")
+            return len(text) // 4 + 1
+
+    checkpoint = tmp_path / "ckpt.jsonl"
+    adapter = PrepFailAdapter()
+    embedder = BulkEmbedder(
+        adapter,
+        max_tokens_per_request=10_000,
+        max_tokens_per_chunk=1000,
+        checkpoint_path=str(checkpoint),
+    )
+    items = [("text one", "a"), ("boom", "bad"), ("text two", "b")]
+
+    # No exception escapes.
+    result = embedder.embed_corpus(items)
+
+    # The two good items embedded; the failing one is omitted from output.
+    assert set(result) == {"a", "b"}
+
+    # The checkpoint records the failing item as _failed (resumable), and the
+    # good items as completed -- already-done work is not lost.
+    entries = [json.loads(l) for l in checkpoint.read_text().splitlines() if l]
+    by_id = {e["chunk_id"]: e for e in entries}
+    assert by_id["bad"]["_failed"] is True
+    assert by_id["bad"]["embedding"] == [0.0] * DIM
+    assert "_failed" not in by_id["a"]
+    assert "_failed" not in by_id["b"]
+
+    # Resume with a healthy adapter retries only the _failed item idempotently.
+    good = FakeAdapter()
+    result2 = BulkEmbedder(
+        good,
+        max_tokens_per_request=10_000,
+        max_tokens_per_chunk=1000,
+        checkpoint_path=str(checkpoint),
+    ).embed_corpus([("recovered", "bad")] + [("text one", "a"), ("text two", "b")])
+    assert "bad" in result2
+    # Only the previously-failed item hit the backend on resume.
+    assert good.batch_sizes == [1]
 
 
 if __name__ == "__main__":
