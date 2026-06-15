@@ -388,14 +388,19 @@ class TrajectoryAnalyzer:
         heller = 0.35 * circularity + 0.40 * tautology + 0.25 * deceleration
         return float(np.clip(heller, 0.0, 1.0))
 
-    def analyze(self, text: str) -> TrajectoryMetrics:
-        """Perform full trajectory analysis on a text passage."""
-        sentences = self.tokenize_sentences(text)
+    def _analyze_matrix(
+        self,
+        embeddings: np.ndarray,
+        labels: List[str],
+    ) -> TrajectoryMetrics:
+        """Run the full velocity/acceleration/spike/deadpan chain on an
+        already-ordered embedding matrix.
 
-        if len(sentences) < 2:
-            raise ValueError(f"Need at least 2 sentences, got {len(sentences)}")
-
-        embeddings = self.embed_sentences(sentences)
+        This is the single internal computation that ``analyze``,
+        ``analyze_segments`` and ``analyze_embeddings`` all funnel into. The
+        ``labels`` ride alongside as ``TrajectoryMetrics.sentences`` so callers
+        can map an index (e.g. ``max_acceleration_index``) back to its step.
+        """
         velocities = self.compute_velocities(embeddings)
         accelerations = self.compute_accelerations(velocities)
         curvatures = self.compute_curvatures(embeddings)
@@ -409,7 +414,7 @@ class TrajectoryAnalyzer:
         heller = self.compute_heller_score(circularity, tautology, deceleration)
 
         return TrajectoryMetrics(
-            sentences=sentences,
+            sentences=labels,
             embeddings=embeddings,
             velocities=velocities,
             accelerations=accelerations,
@@ -429,6 +434,74 @@ class TrajectoryAnalyzer:
             deceleration_score=deceleration,
             heller_score=heller,
         )
+
+    def analyze(self, text: str) -> TrajectoryMetrics:
+        """Perform full trajectory analysis on a text passage.
+
+        Sentence-splits via spaCy, embeds each sentence, then runs the
+        derivative chain.
+        """
+        sentences = self.tokenize_sentences(text)
+
+        if len(sentences) < 2:
+            raise ValueError(f"Need at least 2 sentences, got {len(sentences)}")
+
+        embeddings = self.embed_sentences(sentences)
+        return self._analyze_matrix(embeddings, sentences)
+
+    def analyze_segments(self, segments: List[str]) -> TrajectoryMetrics:
+        """Analyze an already-segmented, ordered list of strings.
+
+        Skips spaCy sentence splitting entirely: each element of ``segments`` is
+        treated as one trajectory step and embedded via the existing
+        :meth:`embed_sentences` path. Use this when the atom is not a sentence
+        (e.g. conversational turns) but the text still needs embedding.
+        """
+        if len(segments) < 2:
+            raise ValueError(f"Need at least 2 segments, got {len(segments)}")
+
+        embeddings = self.embed_sentences(segments)
+        return self._analyze_matrix(embeddings, segments)
+
+    def analyze_embeddings(
+        self,
+        embeddings: np.ndarray,
+        labels: Optional[List[str]] = None,
+    ) -> TrajectoryMetrics:
+        """Analyze a PRE-COMPUTED, already-ordered embedding matrix.
+
+        Skips both tokenization and embedding: the caller supplies an
+        ``[n_steps, dim]`` matrix that already sits in the trajectory order. This
+        is the entry point for precomputed vault vectors (and, later, for the
+        bearing primitive which will hand its own derived matrix in here).
+
+        Args:
+            embeddings: Ordered embedding matrix, shape ``[n_steps, dim]``.
+            labels: Optional per-step labels (e.g. turn texts). When provided,
+                they ride alongside as ``TrajectoryMetrics.sentences`` so a
+                spike index maps back to the step that produced it. Must match
+                ``n_steps`` if given.
+
+        Returns:
+            TrajectoryMetrics computed over the supplied matrix.
+        """
+        embeddings = np.asarray(embeddings)
+        if embeddings.ndim != 2:
+            raise ValueError(
+                f"embeddings must be 2-D [n_steps, dim], got shape {embeddings.shape}"
+            )
+        n_steps = embeddings.shape[0]
+        if n_steps < 2:
+            raise ValueError(f"Need at least 2 steps, got {n_steps}")
+
+        if labels is None:
+            labels = [f"step-{i}" for i in range(n_steps)]
+        elif len(labels) != n_steps:
+            raise ValueError(
+                f"labels length {len(labels)} != n_steps {n_steps}"
+            )
+
+        return self._analyze_matrix(embeddings, list(labels))
 
     def compare(self, golden: TrajectoryMetrics, synthetic: TrajectoryMetrics) -> dict:
         """Compare two passages structurally."""
