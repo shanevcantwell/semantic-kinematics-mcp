@@ -38,7 +38,9 @@ docker-compose up
 
 ## Architecture
 
-A single stateless core, reachable only through the MCP contract. The Gradio UI and agentic tools (MCP clients) orchestrate by composing contracted tool calls — they never reach across the contract boundary into core internals. Model-server lifecycle lives outside the core, managed by llauncher.
+A single core, reachable only through the MCP contract. The Gradio UI and agentic tools (MCP clients) orchestrate by composing contracted tool calls — they never reach across the contract boundary into core internals. Model-server lifecycle lives outside the core, managed by llauncher.
+
+> **Current state:** the core is **not yet stateless** — `StateManager` retains the active adapter and an embedding cache across calls, and `model_load`/`model_unload` manage that lifecycle. The stateless, per-call-model cutover is the target of [ADR-003](docs/ADRs/proposed/ADR-003-stateless-mcp-contract.md) (accepted, not yet implemented).
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full layering invariant, layer definitions, ASCII diagram, and current conformance gaps.
 
@@ -101,7 +103,7 @@ Get embedding vector for text.
 {
   "text": "string (required)",
   "full_vector": "boolean (default: false)",
-  "model": "string (optional, override backend model)"
+  "model": "string (optional; currently informational only — the active backend is used regardless. Per-call model selection lands with ADR-003)"
 }
 ```
 
@@ -352,6 +354,7 @@ python -m semantic_kinematics
 ```
 semantic_kinematics/
 ├── embeddings/        # NV-Embed-v2, LM Studio, SentenceTransformers adapters
+│                      # + BulkEmbedder (bulk.py): resumable, token-aware corpus embedding
 ├── mcp/
 │   ├── server.py      # MCP entry point
 │   ├── state_manager.py
@@ -363,6 +366,7 @@ semantic_kinematics/
 └── utils/             # Text cleaning, HTML extraction
 
 scripts/build_axis_null.py   # Build a background null cache for axis alignment
+scripts/embed_corpus.py      # Bulk-embed a corpus (resumable, token-aware) via BulkEmbedder
 docs/                        # ADRs and math references (axis-alignment.md)
 tests/                       # pytest suite
 ```
