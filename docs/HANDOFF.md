@@ -249,6 +249,25 @@ from here forward should use the canonical identity string.
 
 ## 8. Target state & spike plan (rev 2026-06-15)
 
+### §8 rev 2026-06-15 (d) — SESSION CLOSE: rig design converged (fp32 + MoE offload)
+
+**Cold-start entry; sits on top of §8(c) (survey + magnitude-rehab).** Sentence-atom axis-free magnitude jolt detector = trustworthy NEGATIVE (merged #32). Direction = **residual-stream rig** on a local model. Magnitude mis-atomed, not dead; the per-token residual-transition (StALT) observable removes the projection-axis dependency → Spike A's flat escalation axis no longer blocks.
+
+**Converged rig (this session's output):**
+- **Vehicle:** gemma-4-**26b-a4b** base/instruct contrast (sparse MoE, ~4B active / 26B total) — base vs instruct = differential isolating post-training. Dense 31B base/instruct = heavier dense fallback. JetBrains post-training checkpoint staircase = derivative (jolt-structure emergence); model ID UNKNOWN, gated on the web-tools gap.
+- **Precision = fp32, settled.** RTX-8000 is Turing = fp16-native, **no bf16**. Gemma has an fp16 activation-overflow history → on a bf16-less card that would *fabricate* residual-stream jolts (the false-positive class we must refuse). Fix (user): bf16→fp32 up-cast is exact/lossless (bf16 = truncated fp32) + overflow-proof, Turing runs fp32 natively → measure in fp32, never 16-bit. (Verify whether gemma-4 still has the fp16 pathology before ever trusting an fp16 Gemma residual — informational; fp32 path doesn't depend on it.)
+- **Memory:** MoE CPU-offload — GPU holds the active path only (~4B fp32 ≈ 16GB, comfortable on 48GB); inactive experts live in CPU RAM and page in when routed. Store offloaded experts in **bf16** (~52GB RAM, exact) and up-cast per-expert to fp32 on page-in → halves host-RAM need, zero precision cost. Workload = single-pass activation *capture* (a few teacher-forced traces), not throughput → PCIe paging cost is fine.
+- **Observables (carry all from the start):** StALT — layer-weighted inter-token residual-transition magnitude (primary); next-token **entropy** ("forking tokens", cheap via served-endpoint logprobs); MoE **router/expert-selection shift** (bonus, and an extra axis for the contrast — did post-training reshape routing?); linear correctness probe (0.95 AUROC) for validation. Across-layer prob trajectory is flat (Kim 2025) → observable-specific.
+- **Null:** measured per-layer resampled transitions from jolt-free real-text decoding through the same model; never 1/√d, no whitening-first.
+- **Stack:** HF/transformers + hooks (NNsight/nnterp/TransformerLens) — NOT llauncher/GGUF (serving ≠ activation access; endpoints give only served-logprob entropy and pooling=none final-layer token vectors).
+- **De-risk order:** prove StALT + entropy + probe + measured null on a small fp32 reasoning model (R1-distill-Qwen ≤~9B; fits fp32 on 48GB; has CoT-correctness labels) → then 26b-a4b base/instruct fp32 + offload → then dense 31B / JetBrains staircase if warranted.
+
+**Next actions:** (1) co-locate the 26b-a4b **base HF** on the host from the Windows node (instruct HF already on host: `/mnt/storage/LLMs/google/gemma-4-26B-A4B-it-assistant`). (2) Verify host system RAM (≥~52GB for bf16-stored experts) + disk. (3) Fix the web-tools permission gap (WebSearch/WebFetch + web_search/web_fetch/consult_advisor were denied to subagents; blocks the JetBrains checkpoint-model ID). (4) Build the de-risk pipeline. (5) (info) verify gemma-4 fp16-overflow status.
+
+**Issue #31:** projection-axis framing SUPERSEDED by the residual-stream pivot (StALT needs no axis); re-scope or keep open as the rig-tracking issue.
+
+**Session-close VCS:** PRs #32 (spike negative) and #33 (survey + §8c/§8d) merged to main; their branches deleted (this note rode in on the #33 merge). Tree clean.
+
 ### §8 rev 2026-06-15 (c) — residual-stream pivot; contrastive instrument; magnitude rehabilitated
 - Spike B axis-free magnitude (sentence atom) = trustworthy NEGATIVE (PR #32). North star recorded: **residual stream of a LOCAL model** (NOT Claude internals/CC logs — inaccessible / thinking-not-retained).
 - Deep-research survey: `docs/research/residual-stream-jolt-survey.md` (arXiv-grounded). Infra finding: web MCP tools (WebSearch/WebFetch, web_search/web_fetch, consult_advisor) were permission-denied/unregistered to the subagent → it grounded via curl to arXiv. Gap to fix; also blocks identifying the JetBrains post-training-checkpoint model (news lookup, not arXiv) — PENDING.
