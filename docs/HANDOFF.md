@@ -247,6 +247,22 @@ from here forward should use the canonical identity string.
 
 ---
 
+## 8. Target state & spike plan (rev 2026-06-15)
+
+### §8 rev 2026-06-15 — Stage-1 jolt smoke + seam; nomic fossil; vault confirmed
+**Branch `fix/embeddings-nomic-default`** (off main, PR #26): `a2ee10e` trajectory seam + smoke harness; `1f1bba5` nomic silent-default hard-fail (#14 partial).
+**Bearing primitive (ADR-SKMCP-0001) confirmed NOT implemented** — only ADR-001 axis-alignment exists. Seam now in place: `TrajectoryAnalyzer.analyze_embeddings(matrix)` / `analyze_segments(list)` (no spaCy split) — Spike B plugs in here.
+**Stage-1 jolt smoke** (`scripts/smoke_jolt.py`, motivating fixture, NOT the real instrument):
+- Specimen A — Adams bypass "Dent/Prosser" dialogue, sentence atom, embeddinggemma :8082 → FLAT (max_accel 0.217 @ idx43 = narration "…shadow over Arthur Dent's house"; 0 isolated spikes; deadpan 0.40). Punchlines ("With a torch.", "Beware of the Leopard") did NOT spike.
+- Specimen B — escalation conv `e7c2fe94…`, precomputed per-turn vault vectors → strong isolated spikes (max_accel 0.598 @ idx147 = "O(2^n) complexity" topic-shift turn; 13 spikes; isolation>0.9 cluster idx41-64; deadpan 0.75).
+- Reading: magnitude ALONE separated A/B (opposite of shared-signature premise) BUT confounded (A is bypass dialogue not Vogon poetry; sentence vs turn atom). Peaks on UNpredicted sentences = argument FOR bearing.
+**Provenance:** original "this passage jolts" belief = qwen3.5-9b gist (https://gist.github.com/shanevcantwell/6c0344db773e11fce23591967f2e4572) that NARRATED a jolt — relabeled `drift` as acceleration, hand-cut segments, nomic via silent default (#14). Never ran 2nd-derivative. Not a measurement.
+**thought-vault-integration CONFIRMED fully embedded:** `output/vectors/` — chunks.jsonl (80,520 per-turn) + embed_checkpoint.jsonl (80,520/80,520, embeddinggemma 768d, unit-norm). Dest1 embed prereq (vault #28) appears satisfied. Specimens: escalation `e7c2fe94…`, Vogon `0029_Absurdist_LLM_ideas`.
+**Env provisioned:** pynvml→nvidia-ml-py (test noise gone); spacy 3.8.14 + en_core_web_sm 3.8.0. Tests 41→48.
+**NEXT (fresh stab — issue #25):** (1) real Vogon-poetry run sentence-wise; (2) map B spike cluster to turn text; (3) Spike A union-SVD on escalation_grid (READY w/ caveats, N=8 floor); (4) build ADR-SKMCP-0001 primitive on analyze_embeddings seam vs measured-displacement null, 2 embedders; (5) deferred #14 defaults; (6) merge/clean PR #26; cleanup stray .claude/worktrees/agent-aa3af4a0bc84ae574.
+
+---
+
 ## 8. Target state & spike plan (rev 2026-06-13)
 
 > Supersedes the first 2026-06-13 cut, which scoped the terminal state too

@@ -12,8 +12,13 @@ Usage:
     adapter = get_adapter()
     embedding = adapter.embed("Hello world")
 
-    # Explicit backend selection
-    adapter = get_adapter("lmstudio", model_name="nomic-embed-text-v1.5")
+    # Explicit backend selection; the LMStudio backend requires an explicit
+    # model_name and base_url (no baked default).
+    adapter = get_adapter(
+        "lmstudio",
+        model_name="<your-model>",
+        base_url="http://localhost:1234/v1",
+    )
     adapter = get_adapter("sentence_transformers", model_path="/path/to/model")
 """
 
@@ -43,8 +48,12 @@ def get_adapter(
         # Default NV-Embed-v2 in fp32
         adapter = get_adapter()
 
-        # LM Studio with nomic
-        adapter = get_adapter("lmstudio", model_name="nomic-embed-text-v1.5")
+        # LM Studio (model_name and base_url are both required; no default)
+        adapter = get_adapter(
+            "lmstudio",
+            model_name="<your-model>",
+            base_url="http://localhost:1234/v1",
+        )
 
         # SentenceTransformers (may have compatibility issues)
         adapter = get_adapter("sentence_transformers", model_path="/my/model")

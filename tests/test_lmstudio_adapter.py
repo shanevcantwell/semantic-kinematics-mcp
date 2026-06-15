@@ -19,24 +19,24 @@ class _FakeResponse:
 
 
 def test_tokenize_url_strips_v1():
-    adapter = LMStudioAdapter(base_url="http://localhost:8082/v1")
+    adapter = LMStudioAdapter(model_name="test-model", base_url="http://localhost:8082/v1")
     assert adapter._tokenize_url() == "http://localhost:8082/tokenize"
 
 
 def test_tokenize_url_strips_trailing_slash():
-    adapter = LMStudioAdapter(base_url="http://localhost:8082/v1/")
+    adapter = LMStudioAdapter(model_name="test-model", base_url="http://localhost:8082/v1/")
     assert adapter._tokenize_url() == "http://localhost:8082/tokenize"
 
 
 def test_tokenize_url_without_v1():
-    adapter = LMStudioAdapter(base_url="http://localhost:8082")
+    adapter = LMStudioAdapter(model_name="test-model", base_url="http://localhost:8082")
     assert adapter._tokenize_url() == "http://localhost:8082/tokenize"
 
 
 def test_count_tokens_returns_tokenize_count(monkeypatch):
     """count_tokens returns len of the server's /tokenize token list,
     POSTed to the server-root /tokenize endpoint (not /v1)."""
-    adapter = LMStudioAdapter(base_url="http://localhost:8082/v1")
+    adapter = LMStudioAdapter(model_name="test-model", base_url="http://localhost:8082/v1")
 
     captured = {}
 
@@ -57,7 +57,7 @@ def test_count_tokens_returns_tokenize_count(monkeypatch):
 
 
 def test_count_tokens_raises_on_http_error(monkeypatch):
-    adapter = LMStudioAdapter(base_url="http://localhost:8082/v1")
+    adapter = LMStudioAdapter(model_name="test-model", base_url="http://localhost:8082/v1")
 
     def fake_post(url, json=None, **kwargs):
         return _FakeResponse({}, status_ok=False)
@@ -73,7 +73,7 @@ def test_count_tokens_raises_on_http_error(monkeypatch):
 def test_count_tokens_raises_valueerror_with_body_on_missing_tokens(monkeypatch):
     """A 200 response lacking 'tokens' must raise a diagnosable ValueError that
     includes the response body, not an opaque KeyError."""
-    adapter = LMStudioAdapter(base_url="http://localhost:8082/v1")
+    adapter = LMStudioAdapter(model_name="test-model", base_url="http://localhost:8082/v1")
 
     def fake_post(url, json=None, **kwargs):
         return _FakeResponse({"error": "model not loaded"})
@@ -88,6 +88,29 @@ def test_count_tokens_raises_valueerror_with_body_on_missing_tokens(monkeypatch)
     assert "tokens" in msg
     # The actual body is surfaced for diagnosis.
     assert "model not loaded" in msg
+
+
+def test_constructing_without_model_name_raises():
+    """Rule #14: no baked nomic default. Omitting model_name must raise loudly
+    rather than implicitly selecting a model."""
+    with pytest.raises(ValueError) as excinfo:
+        LMStudioAdapter(base_url="http://localhost:8082/v1")
+    assert "model" in str(excinfo.value).lower()
+
+
+def test_constructing_without_base_url_raises():
+    """Omitting base_url must raise rather than defaulting to the LM-Studio
+    localhost:1234 endpoint."""
+    with pytest.raises(ValueError) as excinfo:
+        LMStudioAdapter(model_name="test-model")
+    assert "endpoint" in str(excinfo.value).lower() or "base_url" in str(
+        excinfo.value
+    )
+
+
+def test_constructing_with_no_args_raises():
+    with pytest.raises(ValueError):
+        LMStudioAdapter()
 
 
 if __name__ == "__main__":

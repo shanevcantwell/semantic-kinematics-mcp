@@ -36,11 +36,10 @@ def get_tools() -> List[Tool]:
                     },
                     "model": {
                         "type": "string",
-                        "description": "Embedding model to use",
-                        "default": "nomic-embed-text-v1.5"
+                        "description": "Embedding model to use (required; no default)"
                     }
                 },
-                "required": ["text"]
+                "required": ["text", "model"]
             }
         ),
         Tool(
@@ -75,10 +74,16 @@ async def embed_text(
     """
     text = args.get("text", "")
     full_vector = args.get("full_vector", False)
-    model = args.get("model", "nomic-embed-text-v1.5")
+    model = args.get("model")
 
     if not text:
         return {"error": "No text provided"}
+
+    # Rule #14: no baked-in model default. A missing model must fail loudly
+    # rather than silently embedding with nomic (a silently-wrong-model is an
+    # unacceptable failure class).
+    if not model:
+        return {"error": "no embedding model specified; pass 'model'"}
 
     try:
         # Note: model parameter is informational only

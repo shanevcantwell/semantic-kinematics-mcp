@@ -28,3 +28,6 @@ htmlcov/
 
 # Embedding cache
 .embedding_cache/
+
+# Copyrighted novel PDFs — must not enter the repo
+data/absurdism/*.pdf
