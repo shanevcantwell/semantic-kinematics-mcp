@@ -26,16 +26,29 @@ class LMStudioAdapter(EmbeddingAdapter):
 
     def __init__(
         self,
-        model_name: str = "text-embedding-nomic-embed-text-v1.5",
-        base_url: str = "http://localhost:1234/v1",
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
     ):
         """
         Initialize LM Studio adapter.
 
         Args:
-            model_name: Model identifier in LM Studio
-            base_url: LM Studio API endpoint
+            model_name: Model identifier in LM Studio (required; no default)
+            base_url: LM Studio API endpoint (required; no default)
+
+        Raises:
+            ValueError: If model_name or base_url is missing. Rule #14 forbids a
+                baked-in default — an implicit nomic model / LM-Studio endpoint
+                is a silently-wrong-model failure class.
         """
+        if not model_name:
+            raise ValueError(
+                "no embedding model specified; pass 'model_name'"
+            )
+        if not base_url:
+            raise ValueError(
+                "no embedding endpoint specified; pass 'base_url'"
+            )
         self._model_name_str = model_name
         self._base_url = base_url
         self._dimensions: Optional[int] = None

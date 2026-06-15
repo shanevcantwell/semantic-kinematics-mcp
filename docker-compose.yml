@@ -10,7 +10,7 @@ services:
     environment:
       - EMBEDDING_BACKEND=${EMBEDDING_BACKEND:-lmstudio}
       - EMBEDDING_SERVER_URL=${EMBEDDING_SERVER_URL:-http://host.docker.internal:1234/v1}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:?embedding model must be set}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
 
