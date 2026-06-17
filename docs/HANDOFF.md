@@ -3,7 +3,48 @@
 **Written:** 2026-06-08  
 **Updated:** 2026-06-11 — ADR-002 and ADR-003 promoted to Accepted; BulkEmbedder
 merged to main (PR #12); ADR-002 migration tracked in sk-mcp #11.  
+**Updated:** 2026-06-17 — session: doctrine canon promoted to harness-tools (ADR-CON-0001); P0–P4 program defined; plan-template + session state captured in SCRATCH below.  
 **Branch at time of writing:** `docs/handoff-index` (off `feat/axis-alignment`)
+
+---
+
+## SCRATCH — 2026-06-17 (planning form + session-close state)
+
+> Ephemeral working notes appended at session close. **Not authoritative** — the ADRs, issues, and §8 remain canon. This zone is for reuse-able form + cold-start pointers.
+
+### Plan template (the form that works — capture for reuse)
+ADHD-informed + waterfall. **The plan's job is to organize *momentum*, not just sequence work — executive function is the primary constraint AND the primary engine.** Core calibration: **warm delivery, cold instrument** — mobilize the engine, keep claim-truth about findings honest/un-hyped. The affective facets below are *payload, not garnish*; deleting them (e.g. "Win"→sterile, "why-it-works"→dependency graph) is a lobotomy of the actual function.
+1. **Terminus first** — the defined end-state in one sentence; everything derives backward.
+2. **Phases (waterfall)** — dependency-ordered; each a Goal + go/no-go **gate**. Phases are the *targets*.
+3. **Steps** — sized for *reading-synthesis* (digestible to read AND absorb) and *independent useful completion*. Four facets:
+   - **Action** — the concrete do.
+   - **Done** — unambiguous "it's finished" (empathy check: actually closeable in one sitting?).
+   - **The hit** — the *visceral* reward: what it feels like to land it, what momentum it unlocks. NOT "gate met."
+   - **Why your brain can land this** — cognitive empathy: *why it won't stall you* (right size · self-contained · novelty · no dependency-wait) + **LINEAR (gates X) / PARALLEL** + **who flies it** (you vs harness).
+4. **Linear vs parallel** per step; parallel work never waits on a gate it doesn't need.
+5. **Rank by completion-probability**; lead with highest-odds independent wins — early momentum compounds.
+6. **Decisions** — only genuine requirements sign-offs (your cognition), never option-menus; harness decides the rest, you veto.
+
+*Provenance:* the user's 2025-06-27 "cognitive exoskeleton" genesis + Gemini's turn-15495 form (which nails momentum-mirroring). **Calibration note:** keep Gemini's warm *delivery*; do NOT inherit its warm *claim-evaluation* — that's the folie-à-deux/spiral hazard flagged elsewhere this session. Warm engine, cold instrument. (My first pass sterilized this into a Jira board; the affective framing is load-bearing, not decoration.)
+
+### Session-close state (cold-start here)
+- **Program defined** (waterfall). Terminus = *pushbutton sk-mcp instrument on nv-embed-v2, cone-nulled, validated (PASS or clean NEGATIVE) vs the 3 founding aims, agent-orchestrated.* Phases P0–P4.
+- **THE SPINE** (one instrument, 3 aims) + the **two-ratchet filter** (Measurement vs Orchestration) are durable in MEMORY.md — read those for framing.
+- **P0 (doctrine canon) COMPLETE & DEPLOYED** — harness-tools is doctrine canon (`ADR-CON-0001` @ harness-tools `1e5b7f0`); `design-docs/agent-constitution` tombstoned (`3eafa58`). pi can pull.
+- **P1 (pipeline proof on gemma) ACTIVE.** Vehicle = prompt-archaeology POC (specimen `~/pi-projects/v3/research/The_Holographic_Substrate.txt`).
+  - Step 1 — tvi branch reconcile *(parallel · harness)*.
+  - Step 2 — **the two requirements: (a) episode-count semantics, (b) synthesis target** *(USER — the only cognition gate; blocks Steps 4–5, NOT 1/3)*.
+  - Step 3 — NotebookLM adapter + extraction → survivor set *(parallel · harness · depends on Step 1)*.
+  - Step 4 — assemble pushbutton + per-k cone-null *(linear · after 2+3)*. Step 5 — synthesis hand-off *(linear · after 4)*.
+- **Horizon:** P2 entry = author/locate the escalation-situatedness ANCHOR (long-pole). P3 = nv-embed bounded adapter fix + re-validate lossless-tiling vs Mistral tokenizer. P4 = personalized-model frontier (the 2025 LoRA vision's living end).
+
+### README → ARCHITECTURE split — DONE 2026-06-17 · **REVIEW THESE DOC CHANGES START OF NEXT SESSION**
+*(Committed to branch `spike/adr-skmcp-0003-conditioned-deadpan-negative` "for now" — README slimmed 383→~150 lines; per-tool reference + trajectory/axis math + new data-pipeline section moved to `docs/ARCHITECTURE.md`; BulkEmbedder usage added to both. Review the split + wording cold next session; consider whether the tool-reference belongs in its own TOOLS.md rather than ARCHITECTURE.md.)*
+
+Original capture (for review reference):
+- `README.md` is **out of control** (383 lines; ~250 are reference/architecture): full per-tool reference (L96–253), trajectory math (L255–309), axis math (L311–338) → belongs in `docs/ARCHITECTURE.md` (exists; already linked L45).
+- **Gap:** the **data pipeline is undocumented end-to-end** — BulkEmbedder is named (L357/369) but the flow (tvi adapters → `UnifiedMessage` → exporter → embedding_bridge → BulkEmbedder → null cache → axis alignment) is absent. **Stale:** tool list says "9 tools" incl. `model_load`/`model_unload` + StateManager (ADR-003 deletes these); predates bearing/jolt/conditioned-atom entirely.
+- **Move:** slim README to {what-it-is · quickstart · backends · links}; relocate tool-reference + math to ARCHITECTURE.md (or a TOOLS.md); add a data-pipeline section; refresh the tool set post-ADR-003 + bearing. *(Candidate GitHub issue — not yet filed.)*
 
 ---
 
