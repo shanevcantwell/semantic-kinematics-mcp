@@ -245,3 +245,200 @@ def score_jolts(
         peak_z=peak_z,
         peak_index=peak_idx,
     )
+
+
+# ===========================================================================
+# Context-conditioned phrase-displacement null (ADR-SKMCP-0003).
+#
+# A separate regime from the sentence ``bearing-magnitude`` null above: the atom
+# is a context-conditioned phrase span, and the null is stratified by the step's
+# ``(actual_k, length_bucket, demarcator_class)`` because pooling-variance and
+# context-overlap are confounded with the comedic signal (ADR Decision 5 /
+# Rationale "Why the null is length/k-stratified"). DisplacementNull and
+# load_null above are LEFT UNTOUCHED; this is additive, no compat shim.
+# ===========================================================================
+
+# Required header keys for the conditioned-null artifact. ``k_range`` and the
+# stratum vocabularies are load-bearing for the sparsity-backoff selection.
+REQUIRED_CONDITIONED_HEADER_KEYS = (
+    "regime",
+    "atom",
+    "embedder",
+    "dim",
+    "k_range",
+)
+EXPECTED_CONDITIONED_REGIME = "bearing-magnitude-conditioned"
+
+# Default minimum stratum size below which scoring backs off to a coarser cell.
+DEFAULT_N_MIN = 200
+
+
+@dataclass
+class ConditionedStratum:
+    """One ``(k, length, demarcator)`` cell of the conditioned null."""
+
+    mean: float
+    std: float
+    n: int
+    sorted_magnitudes: np.ndarray
+    percentiles: Dict[str, float]
+
+    def zscore(self, magnitude: float) -> float:
+        if self.std <= 0.0:
+            return 0.0 if magnitude == self.mean else math.inf
+        return (magnitude - self.mean) / self.std
+
+    def percentile_rank(self, magnitude: float) -> float:
+        if self.sorted_magnitudes.size == 0:
+            return float("nan")
+        idx = int(np.searchsorted(self.sorted_magnitudes, magnitude, side="left"))
+        return 100.0 * idx / self.sorted_magnitudes.size
+
+
+@dataclass
+class ConditionedScore:
+    """Result of scoring a conditioned step against the stratified null."""
+
+    z: float
+    percentile: float
+    # Which backoff level actually answered: "k|length|demarcator",
+    # "k|length", or "k". Makes the calibration legible (ADR confound #2:
+    # if the verdict cell backs off below the demarcator level, the claim
+    # drops to a weaker bound -- so the level must be recorded).
+    backoff_level: str
+    # The concrete stratum key the score was computed against.
+    stratum_key: str
+    n: int
+
+
+@dataclass
+class ConditionedDisplacementNull:
+    """A measured, ``(k, length, demarcator)``-stratified conditioned-phrase null.
+
+    Holds one :class:`ConditionedStratum` per cell plus the header vocabularies
+    needed to drive sparsity backoff. The finest key is
+    ``"k{K}|{length_bucket}|{demarcator}"``; backoff coarsens to ``"k{K}|{length}"``
+    then ``"k{K}"`` when a cell has fewer than ``n_min`` samples.
+    """
+
+    regime: str
+    atom: str
+    embedder: str
+    dim: int
+    k_range: List[int]
+    strata: Dict[str, ConditionedStratum]
+    header: Dict[str, Any]
+
+    @staticmethod
+    def finest_key(k: int, length_bucket: str, demarcator: str) -> str:
+        return f"k{k}|{length_bucket}|{demarcator}"
+
+    @staticmethod
+    def length_key(k: int, length_bucket: str) -> str:
+        return f"k{k}|{length_bucket}"
+
+    @staticmethod
+    def k_key(k: int) -> str:
+        return f"k{k}"
+
+    def score_step(
+        self,
+        magnitude: float,
+        k: int,
+        length_bucket: str,
+        demarcator: str,
+        n_min: int = DEFAULT_N_MIN,
+    ) -> ConditionedScore:
+        """Z-score + percentile a step's magnitude against its stratum.
+
+        SPARSITY BACKOFF: try the finest ``(k, length, demarcator)`` cell first;
+        if it is missing or has ``n < n_min``, back off to ``(k, length)``, then
+        to ``(k)``. The level that answered is recorded on the result. Raises if
+        even the ``(k)`` cell is missing or below ``n_min`` -- an honest failure
+        rather than scoring against a cell too thin to calibrate.
+        """
+        for level, key in (
+            ("k|length|demarcator", self.finest_key(k, length_bucket, demarcator)),
+            ("k|length", self.length_key(k, length_bucket)),
+            ("k", self.k_key(k)),
+        ):
+            stratum = self.strata.get(key)
+            if stratum is not None and stratum.n >= n_min:
+                return ConditionedScore(
+                    z=stratum.zscore(magnitude),
+                    percentile=stratum.percentile_rank(magnitude),
+                    backoff_level=level,
+                    stratum_key=key,
+                    n=stratum.n,
+                )
+        raise ValueError(
+            f"no stratum with n >= {n_min} for (k={k}, length={length_bucket!r}, "
+            f"demarcator={demarcator!r}); even the k-level cell is too thin to "
+            f"calibrate -- refusing to score against an under-populated null."
+        )
+
+
+def load_conditioned_null(path: str) -> ConditionedDisplacementNull:
+    """Load a measured conditioned-phrase displacement null (ADR-SKMCP-0003).
+
+    Hard-fails (no silent default) if the file is missing, the header lacks a
+    required key, or the regime is not ``bearing-magnitude-conditioned``. No
+    legacy-format reader (project rule).
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Conditioned null artifact not found: {path}. "
+            f"Build it first (no silent default)."
+        ) from exc
+
+    header = blob.get("header")
+    if not isinstance(header, dict):
+        raise ValueError(
+            f"Conditioned null artifact {path} has no 'header' block; "
+            f"refusing header-less null."
+        )
+
+    missing = [k for k in REQUIRED_CONDITIONED_HEADER_KEYS if k not in header]
+    if missing:
+        raise ValueError(
+            f"Conditioned null artifact {path} header missing required keys "
+            f"{missing}; refusing to load an under-described null."
+        )
+
+    if header["regime"] != EXPECTED_CONDITIONED_REGIME:
+        raise ValueError(
+            f"Conditioned null artifact {path} regime is {header['regime']!r}, "
+            f"expected {EXPECTED_CONDITIONED_REGIME!r}. "
+            f"Wrong-regime null is a miscalibration."
+        )
+
+    raw_strata = blob.get("strata")
+    if not isinstance(raw_strata, dict) or not raw_strata:
+        raise ValueError(
+            f"Conditioned null artifact {path} has no 'strata' block; "
+            f"a stratified null without strata cannot score anything."
+        )
+
+    strata: Dict[str, ConditionedStratum] = {}
+    for key, cell in raw_strata.items():
+        mags = np.sort(np.asarray(cell.get("sorted_magnitudes", []), dtype=float))
+        strata[key] = ConditionedStratum(
+            mean=float(cell["mean"]),
+            std=float(cell["std"]),
+            n=int(cell["n"]),
+            sorted_magnitudes=mags,
+            percentiles=cell.get("percentiles", {}),
+        )
+
+    return ConditionedDisplacementNull(
+        regime=header["regime"],
+        atom=header["atom"],
+        embedder=header["embedder"],
+        dim=int(header["dim"]),
+        k_range=list(header["k_range"]),
+        strata=strata,
+        header=header,
+    )

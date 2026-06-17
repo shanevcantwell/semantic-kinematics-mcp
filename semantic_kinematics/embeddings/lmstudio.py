@@ -97,6 +97,77 @@ class LMStudioAdapter(EmbeddingAdapter):
             root = root[: -len("/v1")]
         return f"{root.rstrip('/')}/tokenize"
 
+    def _native_embeddings_url(self) -> str:
+        """Derive the server-root ``/embeddings`` URL from the ``/v1`` base_url.
+
+        llama.cpp's native ``/embeddings`` endpoint (server root, not ``/v1``)
+        returns **per-token** vectors when the server runs ``--pooling none`` —
+        unlike the OpenAI-compatible ``/v1/embeddings`` path, which always pools.
+        """
+        root = self._base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[: -len("/v1")]
+        return f"{root.rstrip('/')}/embeddings"
+
+    def tokenize_pieces(self, text: str) -> List[dict]:
+        """Return ``[{"id": int, "piece": str}, ...]`` for ``text``.
+
+        Uses llama.cpp ``/tokenize`` with ``with_pieces=true``. The pieces are
+        the **content** tokens (no BOS/EOS) and concatenate back to ``text``
+        (leading spaces are part of the piece, Gemma convention), so per-token
+        character offsets can be reconstructed exactly for span localization.
+        """
+        response = requests.post(
+            self._tokenize_url(), json={"content": text, "with_pieces": True}
+        )
+        response.raise_for_status()
+        payload = response.json()
+        tokens = payload.get("tokens") if isinstance(payload, dict) else payload
+        if not isinstance(tokens, list) or (
+            tokens and not isinstance(tokens[0], dict)
+        ):
+            body = repr(payload)
+            if len(body) > 500:
+                body = body[:500] + "...(truncated)"
+            raise ValueError(
+                f"/tokenize with_pieces returned unexpected shape; body={body}"
+            )
+        return tokens
+
+    def embed_tokens(self, text: str) -> np.ndarray:
+        """Return **per-token** embeddings for ``text``: shape ``(n_rows, dim)``.
+
+        POSTs ``{"content": text}`` to the native ``/embeddings`` endpoint, which
+        (server in ``--pooling none``) returns ``[{"index": 0, "embedding":
+        [[...], ...]}]`` — a 2-D matrix per item. Rows are ``[BOS] + content +
+        [EOS]``; callers align ``content`` against :meth:`tokenize_pieces` and
+        trim the two specials.
+
+        Raises:
+            ValueError: if the response is pooled (1 row) — the server is not in
+                ``--pooling none`` — or otherwise not the expected 2-D shape.
+        """
+        response = requests.post(
+            self._native_embeddings_url(), json={"content": text}
+        )
+        response.raise_for_status()
+        payload = response.json()
+        try:
+            matrix = np.asarray(payload[0]["embedding"], dtype=float)
+        except (KeyError, IndexError, TypeError) as exc:
+            body = repr(payload)
+            if len(body) > 500:
+                body = body[:500] + "...(truncated)"
+            raise ValueError(
+                f"native /embeddings unexpected shape ({exc}); body={body}"
+            ) from exc
+        if matrix.ndim != 2:
+            raise ValueError(
+                "native /embeddings did not return per-token vectors "
+                f"(got shape {matrix.shape}); is the server in --pooling none?"
+            )
+        return matrix
+
     def count_tokens(self, text: str) -> int:
         """
         Return the exact token count for ``text`` via the server's tokenizer.

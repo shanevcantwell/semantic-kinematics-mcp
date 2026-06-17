@@ -1,0 +1,41 @@
+{
+  "specimen": "bypass_dialogue",
+  "source": "data/absurdism/bypass_dialogue.txt",
+  "segmenter": "semantic_kinematics.bearing.phrase_segment.segment",
+  "authored": "2026-06-16 (US/Mountain)",
+  "authored_discipline": "Indices, controls, sigma, and decision rule fixed from the SEGMENTED TEXT ALONE, before building the conditioned null or running any scoring. Pre-registration per ADR-SKMCP-0003 verdict discipline; this is what makes the both-ways-decisive claim hold and bounds the comparison count to the named indices.",
+  "n_phrases": 91,
+
+  "punchline_indices": [72, 74],
+  "punchline_notes": {
+    "72": "'With a torch.' — canonical deadpan snap; joke requires the cellar/darkness setup at 70-71 (so expected k* ~ 2-3).",
+    "74": "'So had the stairs.' — deadpan snap; requires the 'go down to the cellar' setup at 70."
+  },
+
+  "control_equal_format_indices": [22, 64, 76, 88],
+  "control_equal_format_notes": "SET_QUOTE short dialogue (len 4-7), same stratum as the punchlines but mundane (not comedic discontinuities). Must NOT clear when a punchline does — this is the within-stratum specificity test (confound 2).",
+
+  "control_scene_shift_indices": [79, 80, 81],
+  "control_scene_shift_notes": "TERM_FLOW cloud/shadow narration — the magnitude channel's known scene-shift over-firers (the original 2026-06-15 flat finding's max-acceleration landed on this kind of narration). Different stratum; a cross-stratum sanity that the punchline spike is not merely the magnitude channel doing its scene-shift thing.",
+
+  "flag_sigma": 3.0,
+  "flag_sigma_note": "Matches jolt.py default threshold_sigma; fixed before scoring.",
+
+  "decision_rule": "POSITIVE iff a punchline index (72 or 74) clears sigma>=3.0 in its (k, length_bucket, demarcator_class) stratum at some k* AND stays cleared CONTIGUOUSLY across the usable-k band above k* (an isolated single-k crossing is rejected as per-cell stratum noise), WHILE at those k (i) the equal-format controls do NOT clear and (ii) the punchline's immediate neighbors do NOT clear (local calm-SPIKE-calm isolation = the deadpan shape, not mere spike-existence). NEGATIVE iff no punchline meets this under sigma=3.0.",
+
+  "verdict_cell": {
+    "length_bucket": "4-7",
+    "demarcator_class": "SET_QUOTE",
+    "k_star_expected": "2-3",
+    "note": "The punchlines' own stratum. confound 6: n in THIS cell must be checked; if the conditioned null backs off below the demarcator level here, the verdict drops to the weaker bound ('magnitude can't separate comedic from scene discontinuity at equal formatting' -> 'judged against everything')."
+  },
+
+  "k_range": [0, 1, 2, 3, 4, 5],
+
+  "excluded_with_reason": {
+    "78": "'...Beware of the Leopard.' — the famous capstone, but the segmenter keeps it as one 37-token quote block (length 16+), so the punchline is diluted across the block and is NOT a clean short-snap test at this atom. A finer (intra-quote) split would be needed to test it; recorded as a limitation, not tested this run.",
+    "71": "'That's the display department.' — comedic straight-line adjacent to 72; left as a neighbor (isolation check), not a registered punchline, to avoid adjacent-punchline contamination of the neighbor-non-clearance criterion."
+  },
+
+  "verdict_outcome": "NEGATIVE (2026-06-16). Neither punchline (72,74) clears sigma=3.0 in its finest-level (k|4-7|SET_QUOTE, n=1368) stratum at any k; equal-format controls and scene-shift controls also stay within ~1 sigma. Per the pre-registered bound: magnitude cannot separate comedic from scene/ordinary discontinuity AT EQUAL FORMATTING (NOT 'no signal'). Sub-finding: punchline 72's z rises monotonically with k (-1.66 -> +0.82, ~2.5 sigma in the predicted direction) but stays sub-threshold; 74 does not. Result artifact: output/ramp_deadpan_bypass_result.json. Cleanest case yet for bearing-not-magnitude; aims at the projection/situatedness track (ADR-SKMCP-0001, unbuilt anchor). Raw deadpan 0.69-0.81 declined with k (confound-1 k-artifact, diagnostic only, NOT a detection)."
+}

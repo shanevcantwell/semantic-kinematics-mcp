@@ -29,6 +29,9 @@ htmlcov/
 # Embedding cache
 .embedding_cache/
 
+# Experiment run outputs (verdict artifacts are reproducible from registration + null)
+output/
+
 # Copyrighted novel PDFs — must not enter the repo
 data/absurdism/*.pdf
 
