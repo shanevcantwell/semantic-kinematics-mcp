@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "semantic-kinematics"
-version = "0.2.0"
+version = "0.3.0a0"
 description = "Embedding space analysis toolkit — MCP server and Gradio UI for semantic drift and trajectory dynamics"
 readme = "README.md"
 requires-python = ">=3.10"
