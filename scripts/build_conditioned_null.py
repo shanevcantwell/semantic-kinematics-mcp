@@ -54,10 +54,14 @@ from semantic_kinematics.bearing.conditioned import (  # noqa: E402
 from semantic_kinematics.bearing.phrase_segment import segment  # noqa: E402
 from semantic_kinematics.embeddings.lmstudio import LMStudioAdapter  # noqa: E402
 
-DEFAULT_SOURCE = (
-    "/home/shane/github/shanevcantwell/thought-vault-integration/"
-    "output/vectors/chunks.jsonl"
+# Vault corpus location is environment-driven so the null build runs under any
+# user, not just the corpus author (issue #34). Override THOUGHT_VAULT_VECTORS_DIR
+# to point at a different thought-vault-integration output/vectors checkout.
+_VAULT_VECTORS_DIR = os.environ.get(
+    "THOUGHT_VAULT_VECTORS_DIR",
+    "/srv/dev/shanevcantwell/thought-vault-integration/output/vectors",
 )
+DEFAULT_SOURCE = os.path.join(_VAULT_VECTORS_DIR, "chunks.jsonl")
 EMBED_MODEL = "embeddinggemma-300M-F32-nonpooled"
 EMBED_BASE_URL = "http://localhost:8083/v1"
 EXPECTED_DIM = 768

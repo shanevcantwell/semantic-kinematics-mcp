@@ -66,6 +66,13 @@ Three interchangeable backends behind one `EmbeddingAdapter`, selected via the `
 EMBEDDING_BACKEND=nv_embed
 ```
 
+Path resolution is environment-driven (no hardcoded home directories — issue #34):
+
+| Variable | Used by | Default |
+|----------|---------|---------|
+| `NV_EMBED_MODEL_PATH` | `sentence_transformers` backend | `nvidia/NV-Embed-v2` (HuggingFace hub id; set to a local checkout to skip download) |
+| `THOUGHT_VAULT_VECTORS_DIR` | null builders (`build_displacement_null` / `build_conditioned_null`) and `smoke_jolt` | `/srv/dev/shanevcantwell/thought-vault-integration/output/vectors` |
+
 ## MCP Tools
 
 9 tools over JSON-RPC (stdio). Full request/response schemas and return-field tables are in **[ARCHITECTURE.md → Tool reference](docs/ARCHITECTURE.md#tool-reference)**.
