@@ -212,6 +212,64 @@ class BulkEmbedder:
                     completed[cid] = arr
         return completed
 
+    @property
+    def _meta_path(self) -> Optional[str]:
+        """Sidecar path recording the checkpoint's producing model (issue #16)."""
+        return self.checkpoint_path + ".meta.json" if self.checkpoint_path else None
+
+    def _reconcile_meta(self) -> None:
+        """Make the checkpoint self-describing and guard resume by model identity.
+
+        A bare ``{chunk_id, embedding}`` JSONL cannot identify its producer, and
+        the embedding dimension was the only resume guard -- two different models
+        at the same dimension (e.g. two 4096-d backends) would silently merge
+        into one artifact (issue #16). This writes/validates a sidecar
+        ``<checkpoint>.meta.json`` carrying ``model_name`` + ``dimensions``:
+
+        - No meta yet (fresh run, or adopting a pre-#16 checkpoint): record the
+          current adapter's identity.
+        - Meta present: it MUST match the current adapter or we refuse to resume
+          (PARSE-AT-THE-DOOR fail-loud) rather than mixing incompatible vectors.
+
+        Sidecar, not a header line, so the checkpoint stays a pure
+        one-record-per-line stream (no dual-shape parse).
+        """
+        path = self._meta_path
+        if not path:
+            return
+        current = {
+            "model_name": self.adapter.model_name,
+            "dimensions": int(self.adapter.dimensions),
+        }
+        if os.path.isfile(path):
+            try:
+                with open(path, "r") as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, OSError) as exc:
+                raise ValueError(
+                    f"[bulk] checkpoint metadata {path!r} is unreadable ({exc}); "
+                    f"refusing to resume against an unidentifiable artifact"
+                ) from exc
+            mismatch = {
+                key: {"existing": existing.get(key), "current": current[key]}
+                for key in current
+                if existing.get(key) != current[key]
+            }
+            if mismatch:
+                raise ValueError(
+                    f"[bulk] checkpoint {self.checkpoint_path!r} was produced by a "
+                    f"different model: {mismatch}. Resuming would merge incompatible "
+                    f"vectors -- use a fresh checkpoint path."
+                )
+            return
+        # Atomic write-then-rename: a torn meta (crash mid-write) would be read
+        # as "unreadable" next run and permanently block resume, so never leave
+        # a partial file at ``path``.
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(current, f)
+        os.replace(tmp_path, path)
+
     # ------------------------------------------------------------------
     # Vector helpers
     # ------------------------------------------------------------------
@@ -249,6 +307,11 @@ class BulkEmbedder:
         dim = self.adapter.dimensions
         zero_vec = [0.0] * dim
         total = len(items)
+
+        # #16: write/validate the sidecar identity before touching the
+        # checkpoint, so a model/dim mismatch fails loud instead of silently
+        # merging incompatible vectors.
+        self._reconcile_meta()
 
         completed = self._load_checkpoint()
         pending = [(text, cid) for (text, cid) in items if cid not in completed]

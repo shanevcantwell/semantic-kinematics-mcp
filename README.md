@@ -131,7 +131,7 @@ python scripts/embed_corpus.py corpus.jsonl \
 For a full corpus, **`scripts/embed_full_corpus.sh`** is the canonical runner: it wraps the above with auto-restart on crash and a success-count-based completion signal (via `scripts/embed_status.py`) so a run that crashes mid-way resumes cleanly and never false-completes on `_failed` items. See `scripts/embed_status.py` to check progress at any time — it prints `done failed pending total` for a (corpus, checkpoint) pair.
 
 - **Input:** a JSONL file, one object per line; `--text-field` / `--id-field` name the text and id keys (blank-text lines are skipped; missing ids default to `line-N`).
-- **Output:** the `--checkpoint` JSONL — one record per embedded item. Re-running with the same checkpoint skips already-embedded items and retries only failures (idempotent resume).
+- **Output:** the `--checkpoint` JSONL — one record per embedded item. Re-running with the same checkpoint skips already-embedded items and retries only failures (idempotent resume). A sidecar `<checkpoint>.meta.json` records the producing model (`model_name` + `dimensions`); resuming a checkpoint built by a different model fails loud rather than silently merging incompatible vectors (#16).
 - **Where it sits:** `BulkEmbedder` is a *data-plane* job on the shared adapter substrate — it never crosses the MCP contract boundary. Its output vectors feed downstream analysis, e.g. building the axis-alignment background null. Upstream corpus preparation (chat logs → chunked JSONL) lives in the sibling **thought-vault-integration** repo. See [ARCHITECTURE.md → Data pipeline](docs/ARCHITECTURE.md#data-pipeline-bulk-embedding).
 
 ## Gradio UI
