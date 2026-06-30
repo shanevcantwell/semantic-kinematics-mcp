@@ -25,6 +25,12 @@ CORPUS="${CORPUS:-/srv/dev/shanevcantwell/thought-vault-integration/output/vecto
 CKPT="${CKPT:-$SK/.runs/nv4096/corpus_4096.jsonl}"
 LOG="${LOG:-$SK/.runs/nv4096/embed.log}"
 PY="$SK/.venv/bin/python"
+# nv_embed context is 32768; these budgets keep ~99.7% of the corpus a single
+# piece (p99 ~= 3.7k tokens) so token-prep does not shred the long tail. The
+# default embed_corpus budgets (1500/3000) are embeddinggemma-sized and make
+# the rare mega-chunks (whole conversations) pathologically slow to split.
+MAXREQ="${MAXREQ:-8000}"
+MAXCHUNK="${MAXCHUNK:-8000}"
 
 mkdir -p "$(dirname "$CKPT")" "$(dirname "$LOG")"
 
@@ -41,7 +47,8 @@ while true; do
     echo "[wrapper $(date -u +%FT%TZ)] starting pass; done=$done failed=$failed pending=$pending total=$total" | tee -a "$LOG"
 
     "$PY" "$SK/scripts/embed_corpus.py" "$CORPUS" \
-        --checkpoint "$CKPT" --backend nv_embed >>"$LOG" 2>&1
+        --checkpoint "$CKPT" --backend nv_embed \
+        --max-tokens-per-request "$MAXREQ" --max-tokens-per-chunk "$MAXCHUNK" >>"$LOG" 2>&1
     rc=$?
 
     read -r done failed pending total <<<"$(status)"
