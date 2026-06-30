@@ -213,6 +213,20 @@ class NVEmbedAdapter(EmbeddingAdapter):
             self._model = None
             torch.cuda.empty_cache()
 
+    def _load_tokenizer(self):
+        """Load only the tokenizer (cheap -- no model weights).
+
+        ``count_tokens`` needs the tokenizer but not the ~15GB model, so this
+        loads it independently. ``_load_model`` reuses the same cached instance
+        (its ``if self._tokenizer is None`` guard), so there is only ever one
+        tokenizer regardless of which path loads it first.
+        """
+        if self._tokenizer is None:
+            from transformers import AutoTokenizer
+
+            self._tokenizer = AutoTokenizer.from_pretrained(self._model_path)
+        return self._tokenizer
+
     @property
     def model_name(self) -> str:
         return f"NVEmbed:{self._model_path}"
@@ -225,6 +239,18 @@ class NVEmbedAdapter(EmbeddingAdapter):
     def is_loaded(self) -> bool:
         """Check if model is currently loaded."""
         return self._model is not None
+
+    def count_tokens(self, text: str) -> int:
+        """True token count from NV-Embed's own tokenizer (issue #20).
+
+        Loads only the tokenizer (not the model weights), so BulkEmbedder's
+        token-aware request packing works without paying the full model load.
+        The count includes the tokenizer's default special tokens -- a slight,
+        deliberate over-count that keeps request budgets safely under the limit.
+        Without this, the base class raises NotImplementedError and every item
+        fails token-prep before the model ever loads.
+        """
+        return len(self._load_tokenizer().encode(text))
 
     def embed(self, text: str) -> np.ndarray:
         """

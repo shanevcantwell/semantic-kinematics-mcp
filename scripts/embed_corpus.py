@@ -46,6 +46,28 @@ def _read_items(path, text_field, id_field):
     return items
 
 
+def _make_adapter(backend, model, base_url):
+    """Build an embedding adapter with backend-appropriate constructor kwargs.
+
+    The ``lmstudio`` backend is network-based and takes ``model_name`` +
+    ``base_url``. The in-process backends (``nv_embed`` /
+    ``sentence_transformers``) are path-based: the model is resolved from
+    ``model_path`` or the env-driven default (``NV_EMBED_MODEL_PATH``), and the
+    lmstudio-only kwargs do not apply — forwarding them raises ``TypeError`` in
+    the adapter constructor (the bug this routing fixes). Point the in-process
+    backends at a specific model via the ``NV_EMBED_MODEL_PATH`` env var.
+    """
+    if backend == "lmstudio":
+        return get_adapter(backend, model_name=model, base_url=base_url)
+    if backend == "nv_embed":
+        # Bulk embedding wants the model resident for the whole run. The
+        # adapter's per-call unload default reloads ~15GB of weights per
+        # request-group, which makes a corpus-scale run prohibitively slow
+        # (measured ~2.2s/chunk vs. a single up-front load when resident).
+        return get_adapter(backend, unload_after_use=False)
+    return get_adapter(backend)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Bulk-embed a JSONL corpus.")
     parser.add_argument("corpus", help="Path to input JSONL corpus.")
@@ -62,9 +84,7 @@ def main(argv=None):
     items = _read_items(args.corpus, args.text_field, args.id_field)
     print(f"[embed_corpus] loaded {len(items)} items from {args.corpus}", file=sys.stderr)
 
-    adapter = get_adapter(
-        args.backend, model_name=args.model, base_url=args.base_url
-    )
+    adapter = _make_adapter(args.backend, args.model, args.base_url)
     embedder = BulkEmbedder(
         adapter,
         max_tokens_per_request=args.max_tokens_per_request,
