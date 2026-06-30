@@ -35,5 +35,8 @@ output/
 # Copyrighted novel PDFs — must not enter the repo
 data/absurdism/*.pdf
 
+# Local embedding-run scratch (checkpoints/logs); large artifacts live off-repo (e.g. /mnt/storage)
+.runs/
+
 # Claude Code harness config — managed centrally (canonical lives outside this repo; deployed by symlink/plugin-dir), never committed per-repo
 .claude/
