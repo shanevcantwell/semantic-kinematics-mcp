@@ -70,11 +70,17 @@ class BulkEmbedder:
         max_tokens_per_request: int = 2000,
         max_tokens_per_chunk: int = 1800,
         checkpoint_path: Optional[str] = None,
+        prep_window: int = 256,
     ):
         self.adapter = adapter
         self.max_tokens_per_request = max_tokens_per_request
         self.max_tokens_per_chunk = max_tokens_per_chunk
         self.checkpoint_path = checkpoint_path
+        # Items prepped (split/tokenized) per embed cycle. Bounds the prep that
+        # must re-run after a crash: a restart re-preps only the not-yet-
+        # checkpointed remainder, never the whole corpus. Small enough that the
+        # first checkpoint lands within seconds; large enough to pack groups.
+        self.prep_window = prep_window
 
     # ------------------------------------------------------------------
     # Token estimation and splitting
@@ -285,125 +291,138 @@ class BulkEmbedder:
             if self.checkpoint_path:
                 f_out = open(self.checkpoint_path, "a")
 
-            # Precompute sub-chunks + token cost per pending text once. A
-            # count_tokens/_split_text failure for ONE item marks just that
-            # item _failed and continues -- symmetric with the embed-batch
-            # failure path below -- rather than aborting the whole run and
-            # losing already-completed work with no resumable marker.
-            prepared: List[Tuple[str, List[str], int]] = []
-            for text, cid in pending:
-                try:
-                    sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
-                    cost = sum(self._count_tokens(sc) for sc in sub_chunks)
-                except Exception as exc:  # noqa: BLE001 -- isolate per item.
-                    print(
-                        f"[bulk] preparation (tokenize/split) failed for item "
-                        f"{cid!r} ({exc}); marking _failed and continuing",
-                        file=sys.stderr,
-                    )
-                    mark_failed(cid)
-                    continue
-                if cost > self.max_tokens_per_request:
-                    print(
-                        f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
-                        f"exceeds per-request budget {self.max_tokens_per_request};"
-                        f" it will be sent as its own over-budget group",
-                        file=sys.stderr,
-                    )
-                prepared.append((cid, sub_chunks, cost))
-            if f_out is not None:
-                f_out.flush()
+            # Stream the work in windows: prep (split/tokenize) a window, embed
+            # it, checkpoint, then advance. The previous design prepped EVERY
+            # pending item before the first embed -- a long, UNRESUMABLE head:
+            # a crash before any group embedded lost all that prep with no
+            # on-disk breadcrumb (embedding resumed from the jsonl, prep did
+            # not). Windowing makes the whole run reconstruct-from-checkpoint --
+            # a restart re-preps only items not yet written, never the corpus.
+            for w_start in range(0, len(pending), self.prep_window):
+                batch = pending[w_start:w_start + self.prep_window]
 
-            # Group into request-batches by max_tokens_per_request.
-            groups: List[List[Tuple[str, List[str]]]] = []
-            current: List[Tuple[str, List[str]]] = []
-            current_tokens = 0
-            for cid, sub_chunks, cost in prepared:
-                if current and current_tokens + cost > self.max_tokens_per_request:
-                    groups.append(current)
-                    current = []
-                    current_tokens = 0
-                current.append((cid, sub_chunks))
-                current_tokens += cost
-            if current:
-                groups.append(current)
-
-            for group in groups:
-                # Flatten all sub-chunks across the group into one batch call.
-                flat: List[str] = []
-                counts: List[int] = []
-                for _cid, sub_chunks in group:
-                    flat.extend(sub_chunks)
-                    counts.append(len(sub_chunks))
-
-                try:
-                    raw = self.adapter.embed_batch(flat)
-                    embeddings = np.asarray(raw, dtype=float)
-                    group_failed = embeddings.shape[0] != len(flat)
-                except Exception as exc:  # noqa: BLE001 -- isolate per group.
-                    print(
-                        f"[bulk] group embed failed ({exc}); marking "
-                        f"{len(group)} texts _failed",
-                        file=sys.stderr,
-                    )
-                    embeddings = None
-                    group_failed = True
-
-                # Reassemble one vector per original text.
-                idx = 0
-                for (cid, _sub_chunks), k in zip(group, counts):
-                    if group_failed or embeddings is None:
-                        vec = None
-                    elif k == 1:
-                        # Single sub-chunk: exact passthrough up to L2-normalize,
-                        # so all stored embeddings are unit-norm regardless of
-                        # adapter behavior.
-                        vec = self._l2_normalize(embeddings[idx])
-                    else:
-                        # Direction centroid (#17): L2-normalize EACH sub-chunk
-                        # before averaging so larger-norm sub-chunks can't
-                        # magnitude-dominate the direction, then normalize the
-                        # mean. Independent of whether the adapter returns unit
-                        # vectors.
-                        normalized = np.array(
-                            [self._l2_normalize(embeddings[idx + j]) for j in range(k)]
+                # Precompute sub-chunks + token cost per item in THIS window. A
+                # count_tokens/_split_text failure for ONE item marks just that
+                # item _failed and continues -- symmetric with the embed-batch
+                # failure path below -- rather than aborting the whole run and
+                # losing already-completed work with no resumable marker.
+                prepared: List[Tuple[str, List[str], int]] = []
+                for text, cid in batch:
+                    try:
+                        sub_chunks = self._split_text(text, self.max_tokens_per_chunk)
+                        cost = sum(self._count_tokens(sc) for sc in sub_chunks)
+                    except Exception as exc:  # noqa: BLE001 -- isolate per item.
+                        print(
+                            f"[bulk] preparation (tokenize/split) failed for item "
+                            f"{cid!r} ({exc}); marking _failed and continuing",
+                            file=sys.stderr,
                         )
-                        mean = normalized.mean(axis=0)
-                        if float(np.linalg.norm(mean)) <= 1e-12:
-                            # Antipodal sub-chunks cancelled to ~zero: the mean
-                            # has no direction, so it'll fail _is_valid below and
-                            # be marked _failed. Name the chunk so it's findable.
-                            print(
-                                f"[bulk] item {cid!r}: {k} sub-chunk mean "
-                                f"collapsed to near-zero (antipodal); rejecting",
-                                file=sys.stderr,
-                            )
-                        vec = self._l2_normalize(mean)
-                    idx += k
-
-                    if vec is not None and self._is_valid(vec):
-                        completed[cid] = vec
-                        if f_out is not None:
-                            f_out.write(
-                                json.dumps(
-                                    {"chunk_id": cid, "embedding": vec.tolist()}
-                                )
-                                + "\n"
-                            )
-                        done += 1
-                    else:
                         mark_failed(cid)
+                        continue
+                    if cost > self.max_tokens_per_request:
+                        print(
+                            f"[bulk] warning: item {cid!r} estimated at {cost} tokens "
+                            f"exceeds per-request budget {self.max_tokens_per_request};"
+                            f" it will be sent as its own over-budget group",
+                            file=sys.stderr,
+                        )
+                    prepared.append((cid, sub_chunks, cost))
 
-                # Flush once per group, not per line.
+                # Group THIS window into request-batches by max_tokens_per_request.
+                groups: List[List[Tuple[str, List[str]]]] = []
+                current: List[Tuple[str, List[str]]] = []
+                current_tokens = 0
+                for cid, sub_chunks, cost in prepared:
+                    if current and current_tokens + cost > self.max_tokens_per_request:
+                        groups.append(current)
+                        current = []
+                        current_tokens = 0
+                    current.append((cid, sub_chunks))
+                    current_tokens += cost
+                if current:
+                    groups.append(current)
+
+                for group in groups:
+                    # Flatten all sub-chunks across the group into one batch call.
+                    flat: List[str] = []
+                    counts: List[int] = []
+                    for _cid, sub_chunks in group:
+                        flat.extend(sub_chunks)
+                        counts.append(len(sub_chunks))
+
+                    try:
+                        raw = self.adapter.embed_batch(flat)
+                        embeddings = np.asarray(raw, dtype=float)
+                        group_failed = embeddings.shape[0] != len(flat)
+                    except Exception as exc:  # noqa: BLE001 -- isolate per group.
+                        print(
+                            f"[bulk] group embed failed ({exc}); marking "
+                            f"{len(group)} texts _failed",
+                            file=sys.stderr,
+                        )
+                        embeddings = None
+                        group_failed = True
+
+                    # Reassemble one vector per original text.
+                    idx = 0
+                    for (cid, _sub_chunks), k in zip(group, counts):
+                        if group_failed or embeddings is None:
+                            vec = None
+                        elif k == 1:
+                            # Single sub-chunk: exact passthrough up to L2-normalize,
+                            # so all stored embeddings are unit-norm regardless of
+                            # adapter behavior.
+                            vec = self._l2_normalize(embeddings[idx])
+                        else:
+                            # Direction centroid (#17): L2-normalize EACH sub-chunk
+                            # before averaging so larger-norm sub-chunks can't
+                            # magnitude-dominate the direction, then normalize the
+                            # mean. Independent of whether the adapter returns unit
+                            # vectors.
+                            normalized = np.array(
+                                [self._l2_normalize(embeddings[idx + j]) for j in range(k)]
+                            )
+                            mean = normalized.mean(axis=0)
+                            if float(np.linalg.norm(mean)) <= 1e-12:
+                                # Antipodal sub-chunks cancelled to ~zero: the mean
+                                # has no direction, so it'll fail _is_valid below and
+                                # be marked _failed. Name the chunk so it's findable.
+                                print(
+                                    f"[bulk] item {cid!r}: {k} sub-chunk mean "
+                                    f"collapsed to near-zero (antipodal); rejecting",
+                                    file=sys.stderr,
+                                )
+                            vec = self._l2_normalize(mean)
+                        idx += k
+
+                        if vec is not None and self._is_valid(vec):
+                            completed[cid] = vec
+                            if f_out is not None:
+                                f_out.write(
+                                    json.dumps(
+                                        {"chunk_id": cid, "embedding": vec.tolist()}
+                                    )
+                                    + "\n"
+                                )
+                            done += 1
+                        else:
+                            mark_failed(cid)
+
+                    # Flush once per group, not per line.
+                    if f_out is not None:
+                        f_out.flush()
+
+                    elapsed = time.time() - start_time
+                    rate = done / elapsed if elapsed > 0 else 0.0
+                    print(
+                        f"[bulk] {done}/{total} ({rate:.0f}/s)",
+                        file=sys.stderr,
+                    )
+
+                # A window of only prep-failures produces no groups; flush its
+                # _failed markers so they are durable before the next window.
                 if f_out is not None:
                     f_out.flush()
-
-                elapsed = time.time() - start_time
-                rate = done / elapsed if elapsed > 0 else 0.0
-                print(
-                    f"[bulk] {done}/{total} ({rate:.0f}/s)",
-                    file=sys.stderr,
-                )
         finally:
             if f_out is not None:
                 f_out.close()
