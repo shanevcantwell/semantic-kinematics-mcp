@@ -2,7 +2,8 @@
 Direct NV-Embed-v2 adapter using transformers.
 
 Bypasses sentence-transformers to avoid API incompatibilities with NV-Embed-v2's
-custom code. Loads model in fp32 by default (requires ~28GB VRAM, e.g. RTX-8000).
+custom code. Loads model in fp16 by default (~14GB VRAM, e.g. RTX-8000); fp32
+needs ~28GB and OOMs during batch inference on a 48GB GPU.
 
 NV-Embed-v2's custom modeling code (BidirectionalMistralModel) was written for
 transformers ~4.42. Two compatibility issues with transformers >=4.45:
@@ -13,6 +14,7 @@ We fix both by patching the BidirectionalMistralModel.forward after loading,
 rather than pinning transformers to an old version.
 """
 
+import os
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -143,7 +145,10 @@ class NVEmbedAdapter(EmbeddingAdapter):
         - Set unload_after_use=False to keep model resident (faster, uses VRAM)
     """
 
-    DEFAULT_MODEL_PATH = "nvidia/NV-Embed-v2"
+    # Env-driven so the var named for this backend actually controls it
+    # (mirrors SentenceTransformersAdapter); set NV_EMBED_MODEL_PATH to a local
+    # checkout to skip the HuggingFace download.
+    DEFAULT_MODEL_PATH = os.environ.get("NV_EMBED_MODEL_PATH", "nvidia/NV-Embed-v2")
 
     def __init__(
         self,
