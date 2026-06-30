@@ -53,7 +53,7 @@ docker-compose up
 
 ## Embedding Backends
 
-Three interchangeable backends behind one `EmbeddingAdapter`, selected via the `EMBEDDING_BACKEND` environment variable (this is the "switching layer" — multiple providers' schemas normalized to one contract):
+Three interchangeable backends behind one `EmbeddingAdapter` (this is the "switching layer" — multiple providers' schemas normalized to one contract). Backend selection has two paths: the **MCP server** reads the `EMBEDDING_BACKEND` environment variable, while the **`embed_corpus.py` bulk CLI** selects via its `--backend` flag (it does not consult `EMBEDDING_BACKEND`):
 
 | Backend | Model | Dimensions | Notes |
 |---------|-------|------------|-------|
@@ -70,7 +70,7 @@ Path resolution is environment-driven (no hardcoded home directories — issue #
 
 | Variable | Used by | Default |
 |----------|---------|---------|
-| `NV_EMBED_MODEL_PATH` | `sentence_transformers` backend | `nvidia/NV-Embed-v2` (HuggingFace hub id; set to a local checkout to skip download) |
+| `NV_EMBED_MODEL_PATH` | both in-process backends (`nv_embed` + `sentence_transformers`) | `nvidia/NV-Embed-v2` (HuggingFace hub id; set to a local checkout to skip download) |
 | `THOUGHT_VAULT_VECTORS_DIR` | null builders (`build_displacement_null` / `build_conditioned_null`) and `smoke_jolt` | `/srv/dev/shanevcantwell/thought-vault-integration/output/vectors` |
 
 ## MCP Tools
@@ -104,7 +104,7 @@ Path resolution is environment-driven (no hardcoded home directories — issue #
 
 ## Bulk Embedding a Corpus
 
-`BulkEmbedder` (`semantic_kinematics/embeddings/bulk.py`) turns a JSONL corpus into vectors at scale. It wraps any backend and adds **crash-resume** (checkpoints each embedded item to JSONL, so an interrupted run resumes where it stopped), **token-aware batching** (packs requests under a token budget), **sub-chunking with vector averaging** (splits over-long items, averages the piece vectors), and **backoff retries**.
+`BulkEmbedder` (`semantic_kinematics/embeddings/bulk.py`) turns a JSONL corpus into vectors at scale. It wraps any backend and adds **windowed crash-resume** (it streams prep + embed in windows of `prep_window` items, default 256 — checkpointing each embedded item to JSONL, so an interrupted run re-preps only the not-yet-checkpointed remainder and the *whole* run, prep included, reconstructs from the checkpoint rather than restarting from scratch), **token-aware batching** (packs requests under a token budget), **sub-chunking with vector averaging** (splits over-long items, averages the piece vectors), and **backoff retries**.
 
 ```bash
 python scripts/embed_corpus.py corpus.jsonl \
@@ -117,6 +117,18 @@ python scripts/embed_corpus.py corpus.jsonl \
     --max-tokens-per-request 3000 \
     --max-tokens-per-chunk 1500
 ```
+
+For the in-process **`nv_embed`** backend (NV-Embed-v2 @ 4096-d), two things differ. The model is held **resident** for the whole run — `embed_corpus.py` sets `unload_after_use=False` automatically for `nv_embed`, since the per-call unload default would reload ~15GB of weights per request-group and make a corpus-scale run prohibitively slow. And bulk runs use **larger token budgets** — nv_embed's context is 32768, so the embeddinggemma-sized defaults (1500/3000) over-split the long tail; pass `--max-tokens-per-request 8000 --max-tokens-per-chunk 8000` to keep ~99.7% of the corpus a single piece:
+
+```bash
+python scripts/embed_corpus.py corpus.jsonl \
+    --checkpoint out.jsonl \
+    --backend nv_embed \
+    --max-tokens-per-request 8000 \
+    --max-tokens-per-chunk 8000
+```
+
+For a full corpus, **`scripts/embed_full_corpus.sh`** is the canonical runner: it wraps the above with auto-restart on crash and a success-count-based completion signal (via `scripts/embed_status.py`) so a run that crashes mid-way resumes cleanly and never false-completes on `_failed` items. See `scripts/embed_status.py` to check progress at any time — it prints `done failed pending total` for a (corpus, checkpoint) pair.
 
 - **Input:** a JSONL file, one object per line; `--text-field` / `--id-field` name the text and id keys (blank-text lines are skipped; missing ids default to `line-N`).
 - **Output:** the `--checkpoint` JSONL — one record per embedded item. Re-running with the same checkpoint skips already-embedded items and retries only failures (idempotent resume).
@@ -146,6 +158,8 @@ semantic_kinematics/
 
 scripts/build_axis_null.py   # build a background null cache for axis alignment
 scripts/embed_corpus.py      # bulk-embed a corpus (resumable, token-aware)
+scripts/embed_status.py      # report `done failed pending total` for a (corpus, checkpoint) pair
+scripts/embed_full_corpus.sh # resumable full-corpus runner: auto-restart, success-count completion
 docs/                        # ARCHITECTURE.md, axis-alignment.md, ADRs, HANDOFF.md
 tests/                       # pytest suite
 ```

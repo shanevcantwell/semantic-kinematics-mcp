@@ -70,3 +70,24 @@ def test_load_tokenizer_caches_and_is_load_model_safe(monkeypatch):
     adapter._tokenizer = sentinel
     assert adapter._load_tokenizer() is sentinel
     assert len(calls) == 1  # still only the one call
+
+
+def test_default_model_path_honors_nv_embed_model_path_env(monkeypatch):
+    """The var named for this backend must actually control it (the var named
+    NV_EMBED_MODEL_PATH previously only affected the sentence_transformers
+    backend; nv_embed hardcoded its path)."""
+    import importlib
+
+    from semantic_kinematics.embeddings import nv_embed_adapter as nva
+
+    monkeypatch.delenv("NV_EMBED_MODEL_PATH", raising=False)
+    importlib.reload(nva)
+    assert nva.NVEmbedAdapter.DEFAULT_MODEL_PATH == "nvidia/NV-Embed-v2"
+
+    monkeypatch.setenv("NV_EMBED_MODEL_PATH", "/srv/models/NV-Embed-v2")
+    importlib.reload(nva)
+    try:
+        assert nva.NVEmbedAdapter.DEFAULT_MODEL_PATH == "/srv/models/NV-Embed-v2"
+    finally:
+        monkeypatch.delenv("NV_EMBED_MODEL_PATH", raising=False)
+        importlib.reload(nva)
