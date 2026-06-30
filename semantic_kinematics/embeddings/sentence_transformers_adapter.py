@@ -4,6 +4,7 @@ SentenceTransformers embedding adapter.
 Native PyTorch backend for models that can't be GGUF'd (e.g., NV-Embed-v2).
 """
 
+import os
 from typing import List, Optional
 
 import numpy as np
@@ -21,8 +22,11 @@ class SentenceTransformersAdapter(EmbeddingAdapter):
     Requires GPU for reasonable performance with large models.
     """
 
-    # Default path to NV-Embed-v2 model
-    DEFAULT_MODEL_PATH = "/home/shane/github/NV-Embed-v2"
+    # Default model reference for NV-Embed-v2. Resolved from the environment so
+    # the backend is not pinned to one user's home directory (issue #34). Defaults
+    # to the HuggingFace hub id (user-agnostic, matches NVEmbedAdapter); override
+    # with NV_EMBED_MODEL_PATH to point at a pre-downloaded local checkout.
+    DEFAULT_MODEL_PATH = os.environ.get("NV_EMBED_MODEL_PATH", "nvidia/NV-Embed-v2")
 
     def __init__(
         self,

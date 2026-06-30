@@ -43,7 +43,13 @@ from semantic_kinematics.mcp.state_manager import StateManager  # noqa: E402
 # --- Config (the :8082 embeddinggemma path the vault was embedded with) ---
 SPECIMEN_A_PATH = os.path.join(_REPO_ROOT, "data", "absurdism", "bypass_dialogue.txt")
 
-VAULT_DIR = "/home/shane/github/shanevcantwell/thought-vault-integration/output/vectors"
+# Vault corpus location is environment-driven so the smoke test runs under any
+# user, not just the corpus author (issue #34). Override THOUGHT_VAULT_VECTORS_DIR
+# to point at a different thought-vault-integration output/vectors checkout.
+VAULT_DIR = os.environ.get(
+    "THOUGHT_VAULT_VECTORS_DIR",
+    "/srv/dev/shanevcantwell/thought-vault-integration/output/vectors",
+)
 CHUNKS_PATH = os.path.join(VAULT_DIR, "chunks.jsonl")
 CHECKPOINT_PATH = os.path.join(VAULT_DIR, "embed_checkpoint.jsonl")
 TARGET_CONVERSATION_ID = "e7c2fe94-7960-414d-8d59-92fdd2ee2303"
