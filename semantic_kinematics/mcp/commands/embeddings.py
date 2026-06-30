@@ -129,14 +129,17 @@ async def calculate_drift(
         return {"error": "Both text_a and text_b are required"}
 
     try:
-        from semantic_kinematics.prompt_geometry.metrics import cosine_distance
-
+        # cosine_distance is a method on the embedding adapter (the canonical
+        # authority — ONE-MINT), reached through the StateManager one-door
+        # surface (ONE-DOOR). The former `prompt_geometry.metrics` import
+        # pointed at a module that never existed (issue #35).
         embed_fn = manager.get_embed_fn()
+        adapter = manager.get_adapter()
 
         vec_a = embed_fn(text_a)
         vec_b = embed_fn(text_b)
 
-        drift = cosine_distance(vec_a, vec_b)
+        drift = adapter.cosine_distance(vec_a, vec_b)
 
         # Interpret the drift
         if drift < 0.1:
