@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 
 import pytest
 
@@ -34,14 +35,16 @@ def test_no_home_shane_literal_in_touched_modules():
     """No ``/home/shane`` (or other ``/home/<user>``) literal in source."""
     offenders = []
     for mod in _TOUCHED_MODULES:
-        src = open(mod.__file__, encoding="utf-8").read()
-        if "/home/shane" in src:
+        with open(mod.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        if re.search(r"/home/\w+", src):
             offenders.append(mod.__file__)
-    assert not offenders, f"/home/shane literal still present in: {offenders}"
+    assert not offenders, f"/home/<user> literal still present in: {offenders}"
 
 
-def test_adapter_model_path_default_is_user_agnostic():
+def test_adapter_model_path_default_is_user_agnostic(monkeypatch):
     """Default resolves to the HuggingFace hub id, not a local home path."""
+    monkeypatch.delenv(MODEL_ENV, raising=False)
     importlib.reload(sentence_transformers_adapter)
     default = sentence_transformers_adapter.SentenceTransformersAdapter.DEFAULT_MODEL_PATH
     assert not default.startswith("/home/")
