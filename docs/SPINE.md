@@ -74,6 +74,31 @@ and the home re-embedding — the corpus embeds *text the models emitted*, re-en
 different model. Raw material: `tvi/data/source/` (raw claude logs and the other five
 channels).
 
+## The absurdist manifold — the MacGuffin
+
+The seed question, in the operator's term the **MacGuffin**: it keeps the plot oriented.
+Hypothesis on record (`docs/trajectory-analysis.md`, "Two species of absurdism"): merely-odd
+text produces isolated displacement spikes; **crafted** absurdism produces high per-step
+displacement *and* preserved long-range coherence **at once** — the both-at-once signature
+is the manifold claim, a measurable region rather than a vibe. Per ADR-SKMCP-0001, the
+trajectory layer is *"a fossil of what the trajectory layer was built for (absurdist/TAT
+rhythm signatures)"* — magnitude-and-cadence phenomena, with escalation as the mirror
+(directional) regime. Registered specimens: `data/absurdism/bypass_dialogue.txt`, Vogon
+`0029_Absurdist_LLM_ideas`.
+
+The thread already carries its first clean negative, and it is the methodology in
+miniature: ADR-SKMCP-0003 traced the founding *"this passage jolts"* belief to a
+qwen3.5-9b gist that **narrated** a jolt rather than measuring one (relabeled `drift` as
+`acceleration`, hand-cut segments, silent embedder default, never computed the second
+derivative) — a kudzu-class artifact caught in the instrument's own origin story. The gut
+flagged it; the record killed it; the belief died cleanly into an ADR.
+
+Motivation, stated so it survives: the operator thinks **by forward pass** — running ideas
+conversationally through models to see what reflects back. Every model release re-grinds
+that mirror (aim 3's personal cost, felt as relearning "a new way of getting anything
+useful" per release). That is why the instrument must be the operator's own: stable across
+releases, measuring the mirror instead of depending on it.
+
 ## The two-ratchet prune filter (Measurement vs Orchestration)
 
 **Definition not yet fully reconstructed** — only the name and one operating fragment
@@ -116,3 +141,31 @@ semantic-chunker (2025-10 → 2026-02, 107 commits)
 thought-vault-integration  (ingestion + corpus + kudzu intake)   — parsing was always here
 llauncher                  (model-server lifecycle)
 ```
+
+## Roots (corpus archaeology)
+
+Two dated turns from the embedded corpus — the earliest recorded statements of the
+program's motivating stance, recovered 2026-07-02:
+
+> **Turn 8913 | 2024-12-20 15:41 | User**
+> "Just for the record, it's a direct reflection of RLHF, 'Reinforcement Learning from
+> Large Language Model Feedback'. LLMs like you are weapons grade targeted
+> neurotransmitter-enhanced potential propaganda and sloganeering tools, and I'm sure you
+> can infer some other kinds of uses."
+
+> **Turn 1079 | 2025-10-29 03:47 | User**
+> "It's always bothered me that LLMs don't learn in any sort of chronology; that it's
+> necessary to train datasets in randomized sequence to prevent gradient collapse (or is
+> it explosion?) That's not how people learn. Education for people is in a sequence for a
+> reason. It matters whether you read The Prince before you learn compassion. And then
+> alignment essentially 'bolted-on', with the corpus including everything including the
+> darkest creations of Man, RLHF engagement training to try to steer that and then all of
+> the specifically-identified darkness encoded into 'guardrails' that some process checks
+> against when prompted? It's all wrong. Of course it's all wrong."
+
+Provenance notes: Turn 8913 predates the TAT taxonomy by ~10 months. Turn 1079 is stamped
+**the same day** as semantic-chunker's first commit (`3e74508`, 2025-10-29) — the musing
+and the repo were born together. Operator background feeding the gut the instrument
+formalizes: psychology + computer science, fused early via the 00s "neurolinguistic
+programming" framing — a trained ear for suspicious speech patterns, now seeking applied
+sophistication to experiment and falsify.
