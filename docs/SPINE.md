@@ -83,6 +83,19 @@ NEGATIVE is a gain held (a path closed), not a failure. The filter's action is v
 the record: Spike A logged FLAT/inconclusive, Spike B logged as *trustworthy NEGATIVE*
 (HANDOFF §8). Operator words needed to complete this section.
 
+## Downstream: what hangs on the instrument
+
+**semantic-forge** (behavioral fine-tuning data generation; built 2026-03-30→04-03, dormant
+since) is the clearest downstream bet, and it is **gated on this instrument's validation**
+(operator ruling, 2026-07-02): its validation tools consume sk-mcp's `calculate_drift` /
+`analyze_trajectory` directly, and its embedding-diversity target constants (0.2–0.5) were
+bracketed from semantic-chunker's pre-instrument measurements (presuppositional ~0.21,
+descriptive ~0.38 from imperative baseline) — pre-cone-null, different substrate. Until
+cone-null + calibration land and the directional-axes question returns PASS or clean
+NEGATIVE, semantic-forge cannot be meaningful; a clean NEGATIVE falsifies its methodology
+before any further investment in its wiring. That ordering is the two-ratchet filter in
+action.
+
 ## Standing posture
 
 Totally speculative until validated — the embeddings have not been touched by analysis.
