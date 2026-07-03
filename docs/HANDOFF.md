@@ -29,7 +29,7 @@ ADHD-informed + waterfall. **The plan's job is to organize *momentum*, not just 
 
 ### Session-close state (cold-start here)
 - **Program defined** (waterfall). Terminus = *pushbutton sk-mcp instrument on nv-embed-v2, cone-nulled, validated (PASS or clean NEGATIVE) vs the 3 founding aims, agent-orchestrated.* Phases P0–P4.
-- **THE SPINE** (one instrument, 3 aims) + the **two-ratchet filter** (Measurement vs Orchestration) are durable in MEMORY.md — read those for framing.
+- **THE SPINE** (one instrument, 3 aims) + the **two-ratchet filter** (Measurement vs Orchestration) are durable in [`docs/SPINE.md`](./SPINE.md) — read that for framing. *(2026-07-02: the MEMORY.md this line previously cited was never committed anywhere; SPINE.md is the reconstruction and the one home now.)*
 - **P0 (doctrine canon) COMPLETE & DEPLOYED** — harness-tools is doctrine canon (`ADR-CON-0001` @ harness-tools `1e5b7f0`); `design-docs/agent-constitution` tombstoned (`3eafa58`). pi can pull.
 - **P1 (pipeline proof on gemma) ACTIVE.** Vehicle = prompt-archaeology POC (specimen `~/pi-projects/v3/research/The_Holographic_Substrate.txt`).
   - Step 1 — tvi branch reconcile *(parallel · harness)*.
