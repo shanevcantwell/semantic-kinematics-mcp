@@ -69,10 +69,37 @@ Opus 4.8's high-friction, clumsy **overcorrection** away from sycophancy (specul
 The question: is any of this measurable as pre-transformer-era-style pattern structure in
 embedding space?
 
-**Named confound, unknown quantity:** natural language mediates between the source model
-and the home re-embedding — the corpus embeds *text the models emitted*, re-encoded by a
-different model. Raw material: `tvi/data/source/` (raw claude logs and the other five
-channels).
+**Scope and confounds (sharpened 2026-07-03):**
+- *The transcript is the envelope, not the forward pass.* From the system-prompt/RAG era
+  onward — and unmistakably once mid-2025 harnesses chopped files via ReAct tools — what
+  hit the source model's forward pass diverged from what the export records (truncation,
+  injection, tool-mediated reads; the corpus's ~1 MB user-turn blobs are the extreme
+  case). The instrument measures the **conversational record** — what was said — not what
+  the model conditioned on. Assistant-side text is the tightest surface (it is what the
+  model emitted), which is where kudzu looks anyway.
+- *Observer drift is dissolved by retrospective instrumentation.* The operator's
+  contemporaneous understanding changed across the same interval as the observed models
+  ("when the scaffolding got there vs when my understanding did" is not recoverable from
+  memory). But the corpus text is frozen: one fixed, cone-nulled instrument applied across
+  the whole timeline factors observer drift out by construction. Aim 3 is falsifiable
+  *because* it is retrospective.
+- *Scaffolding eras are annotatable changepoints.* Serving-stack changes should themselves
+  surface as changepoints in the record — the envelope confound is partially measurable,
+  not merely admitted.
+- *Re-embedding mediation* (the original note): the corpus embeds text the models emitted,
+  re-encoded by a different model — a confound of unknown quantity. Raw material:
+  `tvi/data/source/` (raw claude logs and the other five channels).
+
+**The value of a set like this is contrastive** (operator, 2026-07-03). Absolute
+measurements on a single-operator corpus prove little; paired contrasts are the unit of
+evidence — same operator across model generations, same specimen across analyst models
+(the kudzu walks), same era across source channels. The corpus supplies **naturalistic**
+contrasts; **prompt-prix** (sibling repo, alpha, dormant since 2026-04) is the
+**controlled**-contrast generator: fan-out one prompt to N models, results keyed
+`test_id × model_id` (the contrastive cell), plus a repeat-sampling consistency axis
+(N seeds per cell). A real controlled set already exists: the compliance-decay battery
+(44 tests × 4 models — directive survival across 11 grammatical rephrasings), the same
+instrument shape as the mood-multiplier measurements semantic-forge's constants came from.
 
 ## The absurdist manifold — the MacGuffin
 
