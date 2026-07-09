@@ -90,11 +90,15 @@ Produced by the TVI pipeline; `meta.json` = `NVEmbed:nvidia/NV-Embed-v2`, 4096-d
   ratio ≈ 34 effective dims (top-50 dims = 54.5% of variance). Strongly anisotropic,
   moderate-rank. Non-zero rows are exactly unit-normalized (matches sk-mcp
   `nv_embed_adapter` F.normalize).
-- **⚠ Pipeline defect:** 11.74% of sampled rows are EXACT zero vectors — a systematic
-  embed-failure population (~11.5k chunks extrapolated), not noise. Must be filtered from any
-  null/cone estimate; a bug against the TVI pipeline is warranted.
-- **⚠ Figure discrepancy:** the actual file is **98,293 lines**; SPINE records **85,570 /
-  87,004** (tvi#43). Needs reconcile.
+- **Completion + the zero-vectors (corrected 2026-07-09):** the raw checkpoint's ~11.7% zero
+  rows are all `_failed`-tagged, retry-superseded markers — **not lost data, no new pipeline
+  bug**. True completion is 86,748/87,004 (99.71%); 256 genuinely stuck (OOM mega-items,
+  tvi#43 open). The `98,293 lines` vs `87,004` gap is retry/duplicate lines (raw vs distinct
+  chunk_ids), a labeled field — not an anomaly.
+- **Live completion is generated, never hand-typed:**
+  [`docs/generated/CORPUS_STATS.md`](./generated/CORPUS_STATS.md) (`scripts/summarize_corpus.py`)
+  reports both stores' true state on demand. This block records the one-time cone measurement;
+  for counts, read the generated report.
 
 ---
 

@@ -28,11 +28,11 @@ substrate: **null the anisotropy cone of nv-embed-v2** and establish measurement
 Program terminus (HANDOFF): *pushbutton sk-mcp instrument on nv-embed-v2, cone-nulled,
 validated (PASS or clean NEGATIVE) vs the 3 founding aims, agent-orchestrated.*
 Current state: the 4096-d NV-Embed-v2 corpus vectors exist
-(tvi `output/thought-vault-integration-data/nv4096/`; recorded 85,570/87,004 per tvi#43,
-but 98,293 lines on disk — figure discrepancy + a ~12% zero-vector pipeline defect logged in
-[`docs/map.md`](./map.md)). **First analysis touch: 2026-07-09** — cone characterized
-(‖μ‖=0.554, voice-loaded; participation ratio ≈34), **not yet cone-nulled or validated**
-against the aims.
+(tvi `output/thought-vault-integration-data/nv4096/`). Live completion is **generated, not
+hand-typed** — [`docs/generated/CORPUS_STATS.md`](./generated/CORPUS_STATS.md) (4096-d is
+99.71%, 256 OOM-stuck per tvi#43; the raw-line count carries retry duplicates, not loss).
+**First analysis touch: 2026-07-09** — cone characterized (‖μ‖=0.554, voice-loaded;
+participation ratio ≈34), **not yet cone-nulled or validated** against the aims.
 
 ## The three founding aims
 
