@@ -28,8 +28,11 @@ substrate: **null the anisotropy cone of nv-embed-v2** and establish measurement
 Program terminus (HANDOFF): *pushbutton sk-mcp instrument on nv-embed-v2, cone-nulled,
 validated (PASS or clean NEGATIVE) vs the 3 founding aims, agent-orchestrated.*
 Current state: the 4096-d NV-Embed-v2 corpus vectors exist
-(tvi `output/thought-vault-integration-data/nv4096/`, 85,570/87,004 — tvi#43) and are
-**untouched by analysis to date**.
+(tvi `output/thought-vault-integration-data/nv4096/`; recorded 85,570/87,004 per tvi#43,
+but 98,293 lines on disk — figure discrepancy + a ~12% zero-vector pipeline defect logged in
+[`docs/map.md`](./map.md)). **First analysis touch: 2026-07-09** — cone characterized
+(‖μ‖=0.554, voice-loaded; participation ratio ≈34), **not yet cone-nulled or validated**
+against the aims.
 
 ## The three founding aims
 
@@ -135,6 +138,17 @@ NEGATIVE is a gain held (a path closed), not a failure. The filter's action is v
 the record: Spike A logged FLAT/inconclusive, Spike B logged as *trustworthy NEGATIVE*
 (HANDOFF §8). Operator words needed to complete this section.
 
+**Sharpened 2026-07-09 (Measurement half, still partial):** a candidate measurement earns the
+**Measurement** ratchet only if it clears one selection filter — *cheap compute · mathematical
+(not semantic) · contrastive (not absolute) · falsifiable*. A mathematical measure carries a
+null, a noise floor, and a claim that can be wrong in a checkable way; a semantic (LLM-judge)
+measure costs a forward pass, doesn't reproduce, and inherits completion/escalation bias. This
+is the edge behind the day's clean negatives — `deadpan_score`/`heller_score`/jolt-magnitude
+failed the filter (absolute, semantic-adjacent) and fell below noise on embeddinggemma, while
+contrastive drift survived (ADR-SKMCP-0005). Still a stub: this sharpens the *Measurement* gate,
+but the full definition — the Orchestration half and how the two compose — remains
+operator-memory.
+
 ## Downstream: what hangs on the instrument
 
 **semantic-forge** (behavioral fine-tuning data generation; built 2026-03-30→04-03, dormant
@@ -150,7 +164,9 @@ action.
 
 ## Standing posture
 
-Totally speculative until validated — the embeddings have not been touched by analysis.
+Totally speculative until validated — as of 2026-07-09 the embeddings have had their **first
+analysis touch** (cone characterization, `docs/map.md`), still not cone-nulled or validated
+against the three aims.
 Several projects are loosely roadmapped for the corpus (HANDOFF §8: Dest 1 corpus-mapping /
 Dest 2 directional behavioral axes; residual-stream jolt rig as a later separate bet;
 prompt-archaeology POC). tvi has been an **intake pool** rather than an operator priority
