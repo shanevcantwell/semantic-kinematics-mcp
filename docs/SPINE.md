@@ -157,6 +157,13 @@ prompt-archaeology POC). tvi has been an **intake pool** rather than an operator
 since ~Jan 2026 — material is tossed in deliberately, to be sorted as agent capability
 becomes sufficient. That is a design choice, not neglect; this file is part of the sorting.
 
+**Wider constellation:** newer targets beyond the founding three — intelligent-`assert()`
+(prompt-prix), seeking/thrash detection, longitudinal per-user drift (TVI-origin) — are held
+in [`docs/map.md`](./map.md) to keep this read-first file focused on the founding aims. Nodes
+there are visitable in any order and all pass one filter: *cheap · mathematical (not
+semantic) · contrastive · falsifiable* — the same filter that falsified the absolute affect
+scores (ADR-SKMCP-0005).
+
 ## Lineage map
 
 ```
