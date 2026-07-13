@@ -75,6 +75,24 @@ falsified scores.
   conditioning problem one level up.
 - **Status:** unexplored; single-stream POC available on the tvi corpus.
 
+## Node — Co-adaptation: the instrument turned on the operator  ·  full doc: [`research/co-adaptation-longitudinal.md`](./research/co-adaptation-longitudinal.md)
+- **Measurement:** the *mirror of Aim 3* — not how the model drifted, but how the **operator
+  co-adapted** to it, on the operator's own longitudinal stream (self-baseline ⇒ cone + voice
+  cancel).
+- **Node A — LLM-accent / reverse entrainment:** human register adoption as a **lagged
+  step-response with overshoot** around register changepoints (release / sysprompt / RBR). The tell
+  is *migration from conditioned to saturated affect* (entropy collapse), not rate. Pilot: the
+  `exclamation_analysis_2023-2025.json` crossover (user out-exclaims the receding AI late).
+- **Node B — ideation-variability trajectory:** a reported (encoder-unrecovered) dispersion drop
+  over ~2 yr. **Signal firewalled from interpretation** — the model-authored "reduced ADHD
+  influence" reading is held as high-inference and out of instrument reach; primary confound is
+  channel composition (agentic-boilerplate back-half). B may be A's shadow (entrainment narrows
+  dispersion).
+- **Constraint:** measure geometry, not cognition; H0 before the run; fixed encoder; changepoint
+  anchoring; a 2-message atom cannot see it.
+- **Status:** incubating; exclamation pilot in hand, timestamped; Node B needs artifact recovery
+  (step zero).
+
 ---
 
 ## Datasets & provenance (in play)
@@ -85,11 +103,16 @@ Produced by the TVI pipeline; `meta.json` = `NVEmbed:nvidia/NV-Embed-v2`, 4096-d
 
 - **First analysis touch: 2026-07-09** (cone characterization) — this *updates* SPINE's
   "untouched by analysis to date" / "the embeddings have not been touched by analysis."
-- **Measured cone (voice-loaded — instrument + operator voice, inseparable from one corpus):**
-  ‖μ‖ = 0.554 (~80× the isotropic baseline 1/√N), mean pairwise cosine = 0.308, participation
-  ratio ≈ 34 effective dims (top-50 dims = 54.5% of variance). Strongly anisotropic,
-  moderate-rank. Non-zero rows are exactly unit-normalized (matches sk-mcp
-  `nv_embed_adapter` F.normalize).
+- **Measured cone (voice-loaded — instrument + operator voice, inseparable from one corpus).**
+  Now **reproducible** via `scripts/measure_cone.py` (reran 2026-07-12, N=86,748; reproduced the
+  baseline exactly): ‖μ‖ = 0.555 (~160× the isotropic baseline 1/√N = 0.0034 — the earlier "~80×"
+  was an error), mean pairwise cosine = 0.311 ≈ ‖μ‖² (the identity), **centered** participation
+  ratio ≈ 34 effective dims (top-50 = 54.5% of variance); **uncentered** PR = 8.1 (de-meaning alone
+  lifts effective rank 8→34, removing exactly ‖μ‖²=0.308 of the energy). Strongly anisotropic,
+  moderate-rank. Non-zero rows exactly unit-normalized (matches `nv_embed_adapter` F.normalize).
+  The top-2 *centered* axes are provenance/format, not semantics — PC1 = export-channel (Gemini
+  prose ↔ Claude-Code tool-stubs, partly a `[Tool use: Read]` duplication artifact), PC2 =
+  register (abstract ↔ terse-agentic); see `scripts/probe_axis_poles.py`.
 - **Completion + the zero-vectors (corrected 2026-07-09):** the raw checkpoint's ~11.7% zero
   rows are all `_failed`-tagged, retry-superseded markers — **not lost data, no new pipeline
   bug**. True completion is 86,748/87,004 (99.71%); 256 genuinely stuck (OOM mega-items,
