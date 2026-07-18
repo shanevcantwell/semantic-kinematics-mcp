@@ -86,8 +86,8 @@ Path resolution is environment-driven (no hardcoded home directories — issue #
 | `compare_trajectories` | Fitness score comparing two passages structurally |
 | `analyze_axis_alignment` | Project a passage onto a caller-defined axis, z-scored against a background null |
 | `model_status` | Backend state (type, model, dimensions, cache) |
-| `model_load` | Load a backend *(slated for removal under ADR-003)* |
-| `model_unload` | Unload model, free memory *(slated for removal under ADR-003)* |
+| `model_load` | Load a backend *(slated for removal under ADR-SKM-0009)* |
+| `model_unload` | Unload model, free memory *(slated for removal under ADR-SKM-0009)* |
 
 ### Configure in Claude Code
 
@@ -168,7 +168,7 @@ tests/                       # pytest suite
 
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — layering invariant, tool reference, analysis methods (the math), data pipeline, conformance gaps.
 - **[axis-alignment.md](docs/axis-alignment.md)** — full math for the referential axis projection.
-- **[ADRs](docs/ADRs/proposed/)** — design decisions (ADR-001 axis alignment, ADR-002 unified adapter, ADR-003 stateless MCP).
+- **[ADRs](docs/ADRs/proposed/)** — design decisions (ADR-SKM-0007 axis alignment, ADR-SKM-0008 unified adapter, ADR-SKM-0009 stateless MCP).
 - **[HANDOFF.md](docs/HANDOFF.md)** — cross-repo resume index.
 
 ## Requirements

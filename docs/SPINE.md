@@ -110,14 +110,14 @@ The seed question, in the operator's term the **MacGuffin**: it keeps the plot o
 Hypothesis on record (`docs/trajectory-analysis.md`, "Two species of absurdism"): merely-odd
 text produces isolated displacement spikes; **crafted** absurdism produces high per-step
 displacement *and* preserved long-range coherence **at once** — the both-at-once signature
-is the manifold claim, a measurable region rather than a vibe. Per ADR-SKMCP-0001, the
+is the manifold claim, a measurable region rather than a vibe. Per ADR-SKM-0001, the
 trajectory layer is *"a fossil of what the trajectory layer was built for (absurdist/TAT
 rhythm signatures)"* — magnitude-and-cadence phenomena, with escalation as the mirror
 (directional) regime. Registered specimens: `data/absurdism/bypass_dialogue.txt`, Vogon
 `0029_Absurdist_LLM_ideas`.
 
 The thread already carries its first clean negative, and it is the methodology in
-miniature: ADR-SKMCP-0003 traced the founding *"this passage jolts"* belief to a
+miniature: ADR-SKM-0003 traced the founding *"this passage jolts"* belief to a
 qwen3.5-9b gist that **narrated** a jolt rather than measuring one (relabeled `drift` as
 `acceleration`, hand-cut segments, silent embedder default, never computed the second
 derivative) — a kudzu-class artifact caught in the instrument's own origin story. The gut
@@ -145,7 +145,7 @@ null, a noise floor, and a claim that can be wrong in a checkable way; a semanti
 measure costs a forward pass, doesn't reproduce, and inherits completion/escalation bias. This
 is the edge behind the day's clean negatives — `deadpan_score`/`heller_score`/jolt-magnitude
 failed the filter (absolute, semantic-adjacent) and fell below noise on embeddinggemma, while
-contrastive drift survived (ADR-SKMCP-0005). Still a stub: this sharpens the *Measurement* gate,
+contrastive drift survived (ADR-SKM-0005). Still a stub: this sharpens the *Measurement* gate,
 but the full definition — the Orchestration half and how the two compose — remains
 operator-memory.
 
@@ -178,7 +178,7 @@ becomes sufficient. That is a design choice, not neglect; this file is part of t
 in [`docs/map.md`](./map.md) to keep this read-first file focused on the founding aims. Nodes
 there are visitable in any order and all pass one filter: *cheap · mathematical (not
 semantic) · contrastive · falsifiable* — the same filter that falsified the absolute affect
-scores (ADR-SKMCP-0005).
+scores (ADR-SKM-0005).
 
 ## Lineage map
 

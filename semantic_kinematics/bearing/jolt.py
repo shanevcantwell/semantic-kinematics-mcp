@@ -248,7 +248,7 @@ def score_jolts(
 
 
 # ===========================================================================
-# Context-conditioned phrase-displacement null (ADR-SKMCP-0003).
+# Context-conditioned phrase-displacement null (ADR-SKM-0003).
 #
 # A separate regime from the sentence ``bearing-magnitude`` null above: the atom
 # is a context-conditioned phrase span, and the null is stratified by the step's
@@ -379,7 +379,7 @@ class ConditionedDisplacementNull:
 
 
 def load_conditioned_null(path: str) -> ConditionedDisplacementNull:
-    """Load a measured conditioned-phrase displacement null (ADR-SKMCP-0003).
+    """Load a measured conditioned-phrase displacement null (ADR-SKM-0003).
 
     Hard-fails (no silent default) if the file is missing, the header lacks a
     required key, or the regime is not ``bearing-magnitude-conditioned``. No

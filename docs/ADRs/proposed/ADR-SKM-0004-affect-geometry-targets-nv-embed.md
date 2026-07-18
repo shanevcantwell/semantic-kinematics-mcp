@@ -1,9 +1,9 @@
-# ADR-SKMCP-0004: Affect-direction measurement targets nv-embed-v2, not embeddinggemma-300m
+# ADR-SKM-0004: Affect-direction measurement targets nv-embed-v2, not embeddinggemma-300m
 
 **Status:** proposed
 **Date:** 2026-06-24 (US/Mountain)
 **Author:** shanevcantwell, with Claude (orchestrator) as drafting collaborator
-**Related:** §8 target-state/spike plan (2026-06-13); ADR-SKMCP-0001 (bearing primitive); ADR-SKMCP-0002 (bearing tool contract); llauncher #155
+**Related:** §8 target-state/spike plan (2026-06-13); ADR-SKM-0001 (bearing primitive); ADR-SKM-0002 (bearing tool contract); llauncher #155
 
 **Supersedes:** —
 **Superseded by:** —
