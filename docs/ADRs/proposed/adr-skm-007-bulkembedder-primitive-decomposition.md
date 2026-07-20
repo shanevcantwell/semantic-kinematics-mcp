@@ -1,4 +1,4 @@
-# ADR-SKMCP-0007: BulkEmbedder primitive decomposition — stable facade, frozen artifacts, adopt-style sidecar versioning
+# ADR-SKM-007: BulkEmbedder primitive decomposition — stable facade, frozen artifacts, adopt-style sidecar versioning
 
 **Status:** accepted
 **Date:** 2026-07-19 (US/Mountain)
