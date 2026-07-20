@@ -1,7 +1,8 @@
 # ADR-SKMCP-0007: BulkEmbedder primitive decomposition — stable facade, frozen artifacts, adopt-style sidecar versioning
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-07-19 (US/Mountain)
+**Ratified:** 2026-07-19 (US/Mountain) — independent Opus design-gate review (PR #52). Reviewer did not author this ADR. All five checks passed (three-part test; banked-evidence conformance — every TVI-safety condition present and grounded against `bulk.py`; internal consistency + house format; THIN-CONTRACT; extraction fork recorded-not-decided). Every claim verified against source, not prose: `_reconcile_meta`'s refuse-on-any-differing-key loop (bulk.py:253-263) confirms clause 4's adopt-style mandate is the only correct shape; the live TVI sidecar (`{model_name, dimensions}` only) confirms #51's gap is open on a banked artifact. No clause required amendment; no defective decision or missing safety condition found.
 **Related:** ADR-002 (unified adapter — BulkEmbedder's home, `EmbeddingAdapter` contract); ADR-003 (control/data-plane split — bulk ingestion runs *outside* MCP); ADR-SKMCP-0006 (`_failed`/dedup completion semantics the checkpoint contract encodes); sk-mcp#51 (aggregation-semantics commensurability gap, resolved here); ComfyUI-DiffusionGemma#103 (envelope/payload carve, primitive decomposition, extraction fork — the full evidence thread); local-inference-pool#1 (extraction ONE-MINT hygiene cost)
 
 ---
