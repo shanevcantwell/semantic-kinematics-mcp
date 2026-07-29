@@ -71,7 +71,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         elif name == "analyze_axis_alignment":
             result = await axis_alignment.analyze_axis_alignment(state_manager, arguments)
 
-        # Direction-probe tools (ADR-SKM-008 Phase 2/3)
+        # Direction-probe tools (ADR-SKM-008 Phase 2/3/4)
         elif name == "initialize_direction":
             result = await direction.initialize_direction(state_manager, arguments)
         elif name == "project_text":
@@ -84,6 +84,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             result = await direction.query_rates(state_manager, arguments)
         elif name == "top_exemplars":
             result = await direction.top_exemplars(state_manager, arguments)
+        elif name == "cross_project":
+            result = await direction.cross_project(state_manager, arguments)
+        elif name == "direction_diagnostics":
+            result = await direction.direction_diagnostics(state_manager, arguments)
+        elif name == "preview_pattern":
+            result = await direction.preview_pattern(state_manager, arguments)
 
         # Model management tools
         elif name == "model_status":
