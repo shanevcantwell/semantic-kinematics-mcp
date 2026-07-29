@@ -390,12 +390,15 @@ def test_project_corpus_matvec_matches_known_axis_displacement(tmp_path, scene):
         )
     )
     loaded = load_projection(result["projection_ref"])
-    # z array here is the raw projection (direction has null mu0=0,sigma0=1
-    # in the fixture, so project_corpus's persisted "z" is the raw
-    # projection value -- see write_projection_artifact/project_corpus).
+    # The persisted z is the z-score of the raw projection against the
+    # direction's null_reference; the default fixture's null is mu0=0,sigma0=1,
+    # so z == raw projection here (the raw value is also persisted separately as
+    # loaded.projection -- both checked against the analytic displacement).
     by_rowid = dict(zip(loaded.rowid_mm.tolist(), loaded.z.tolist()))
+    by_rowid_raw = dict(zip(loaded.rowid_mm.tolist(), loaded.projection.tolist()))
     for i, expected in enumerate(scene["displacements"]):
         assert by_rowid[i] == pytest.approx(expected, abs=1e-4)
+        assert by_rowid_raw[i] == pytest.approx(expected, abs=1e-4)
 
 
 def test_project_corpus_persists_direction_and_memmap_sha(tmp_path, scene):
@@ -1101,12 +1104,14 @@ def test_load_projection_round_trip(tmp_path, scene):
         out_dir=str(tmp_path / "projections"),
         direction=d.load_direction(scene["direction_json"]),
         rowids_mm=np.array([0, 1, 2]),
+        projection=np.array([1.0, 2.0, 3.0]),
         z=np.array([0.1, 0.2, 0.3]),
         n_used=scene["n_used"],
     )
     loaded = load_projection(json_path)
     np.testing.assert_allclose(loaded.rowid_mm, [0, 1, 2])
     np.testing.assert_allclose(loaded.z, [0.1, 0.2, 0.3])
+    np.testing.assert_allclose(loaded.projection, [1.0, 2.0, 3.0])
     assert loaded.n_used == scene["n_used"]
 
 
@@ -1364,6 +1369,7 @@ def test_top_exemplars_skips_rowid_with_no_chunk_id_mapping(tmp_path, scene):
         out_dir=str(tmp_path / "projections"),
         direction=d.load_direction(scene["direction_json"]),
         rowids_mm=np.array([0, 99999]),  # 99999 has no corpus.db row
+        projection=np.array([1.0, 100.0]),
         z=np.array([1.0, 100.0]),  # rank it first if it were included
         n_used=scene["n_used"],
     )
@@ -1389,3 +1395,131 @@ def test_top_exemplars_skips_rowid_with_no_chunk_id_mapping(tmp_path, scene):
     assert "error" not in result, result
     assert len(result["exemplars"]) == 1
     assert result["exemplars"][0]["chunk_id"] == "chunk-0"
+
+
+# --------------------------------------------------------------------------- #
+# Z-score vs raw-projection unit contract (PR #65 review BLOCKER regression).
+#
+# The defect this class enforces against: project_corpus persisted the RAW
+# projection under the 'z' key, and build_rate_table/top_exemplars then
+# thresholded/ranked those raw values against calibrate_threshold_from_
+# direction's standard-normal-quantile output -- a unit mismatch invisible
+# whenever the null_reference happened to be mu0=0,sigma0=1 (as every prior
+# fixture was). These tests use a non-trivial null (mu0=0.3, sigma0=2.5) so
+# the z-scale and the raw-projection scale genuinely diverge; absence of this
+# class is exactly what masked the defect.
+# --------------------------------------------------------------------------- #
+
+_NULL_MU0 = 0.3
+_NULL_SIGMA0 = 2.5
+
+
+def _project_corpus_with_nontrivial_null(tmp_path, scene):
+    """Build a direction whose recorded null_reference is mu0=0.3, sigma0=2.5,
+    project the scene corpus through it, and return the loaded artifact. The
+    scene's axis is dim-0-aligned with mu=0, so the raw projection of row i is
+    exactly its displacement (i)."""
+    direction_json = _write_direction_artifact(
+        tmp_path,
+        scene["calibration"],
+        scene["true_axis"],
+        pattern_id="nontrivial-null",
+        null_mu0=_NULL_MU0,
+        null_sigma0=_NULL_SIGMA0,
+    )
+    result = _run(
+        project_corpus(
+            manager=None,
+            args={
+                "direction_ref": direction_json,
+                "calibration_ref": scene["calibration_json"],
+                "out_dir": str(tmp_path / "projections_nn"),
+            },
+        )
+    )
+    assert "error" not in result, result
+    return direction_json, load_projection(result["projection_ref"])
+
+
+def test_project_corpus_persists_genuine_zscore_distinct_from_raw_projection(tmp_path, scene):
+    """(a) With sigma0 != 1 the persisted z is a genuine z-score, NOT the raw
+    projection: z_i == (raw_i - mu0)/sigma0, and the two arrays differ."""
+    _direction_json, loaded = _project_corpus_with_nontrivial_null(tmp_path, scene)
+
+    # Raw projection of row i is its displacement i (dim-0 axis, mu=0).
+    raw_by_rowid = dict(zip(loaded.rowid_mm.tolist(), loaded.projection.tolist()))
+    z_by_rowid = dict(zip(loaded.rowid_mm.tolist(), loaded.z.tolist()))
+    for i, displacement in enumerate(scene["displacements"]):
+        assert raw_by_rowid[i] == pytest.approx(displacement, abs=1e-4)
+        expected_z = (displacement - _NULL_MU0) / _NULL_SIGMA0
+        assert z_by_rowid[i] == pytest.approx(expected_z, abs=1e-4)
+
+    # The two arrays are genuinely different units (the defect stored raw as z).
+    assert not np.allclose(loaded.projection, loaded.z)
+    # And the z matches z_scores() applied to the raw projection.
+    np.testing.assert_allclose(
+        loaded.z, z_scores(loaded.projection, _NULL_MU0, _NULL_SIGMA0), atol=1e-9
+    )
+
+
+def test_rate_table_at_zscale_threshold_differs_from_raw_projection_interpretation(tmp_path, scene):
+    """(b) A rate table computed at a z-scale threshold changes vs. the
+    raw-projection interpretation. At z-threshold t, a chunk counts as 'above'
+    iff (raw - mu0)/sigma0 >= t, i.e. raw >= mu0 + t*sigma0 -- which is a
+    DIFFERENT raw cutoff than treating t as a raw threshold. If the artifact
+    had (buggy) raw values under 'z', the same threshold would select a
+    different set, changing the rate."""
+    _direction_json, loaded = _project_corpus_with_nontrivial_null(tmp_path, scene)
+
+    corpus_rows = [
+        {"rowid_mm": i, "era": "Opus 4.8", "channel": "claude_code", "speaker": "assistant"}
+        for i in range(scene["n_used"])
+    ]
+
+    z_threshold = 2.0  # a standard-normal-quantile-scale threshold
+    # On the genuine z-scale: raw >= mu0 + z*sigma0 = 0.3 + 2.0*2.5 = 5.3, so
+    # displacements 6..19 count above -> 14 of 20.
+    table_z = build_rate_table(loaded, threshold=z_threshold, corpus_rows=corpus_rows)
+    assert table_z["n_total"] == scene["n_used"]
+    n_above_z = table_z["groups"][0]["n_above"]
+    assert n_above_z == 14  # displacements >= 5.3
+
+    # The raw-projection interpretation of the SAME numeric threshold (the
+    # buggy path): raw >= 2.0 -> displacements 2..19 count -> 18 of 20.
+    raw_projection_fake = _make_projection(
+        loaded.rowid_mm.tolist(), loaded.projection.tolist()
+    )
+    table_raw = build_rate_table(
+        raw_projection_fake, threshold=z_threshold, corpus_rows=corpus_rows
+    )
+    n_above_raw = table_raw["groups"][0]["n_above"]
+    assert n_above_raw == 18  # displacements >= 2.0
+
+    # The two interpretations disagree -- the unit mismatch is observable.
+    assert n_above_z != n_above_raw
+    assert table_z["groups"][0]["rate"] != table_raw["groups"][0]["rate"]
+
+
+def test_project_corpus_refuses_zero_sigma_null_reference(tmp_path, scene):
+    """project_corpus handles the zero-sigma refusal consistently with
+    z_scores' existing behavior: a degenerate null_reference (sigma0=0) is
+    refused with the sigma0 message, not persisted as a raw-as-z artifact."""
+    zero_sigma_direction = _write_direction_artifact(
+        tmp_path,
+        scene["calibration"],
+        scene["true_axis"],
+        pattern_id="zero-sigma-corpus",
+        null_sigma0=0.0,
+    )
+    result = _run(
+        project_corpus(
+            manager=None,
+            args={
+                "direction_ref": zero_sigma_direction,
+                "calibration_ref": scene["calibration_json"],
+                "out_dir": str(tmp_path / "projections_zero"),
+            },
+        )
+    )
+    assert "error" in result
+    assert "sigma0" in result["error"]

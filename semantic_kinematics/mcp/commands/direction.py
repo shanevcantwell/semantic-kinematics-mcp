@@ -1475,21 +1475,35 @@ def write_projection_artifact(
     out_dir: str,
     direction: "Direction",
     rowids_mm: np.ndarray,
+    projection: np.ndarray,
     z: np.ndarray,
     n_used: int,
 ) -> Tuple[str, str]:
-    """Persist the full-corpus projection artifact: per-``rowid_mm`` z-score,
-    keyed by direction-sha + memmap-sha. ``n_used`` is recorded so a consumer
-    (or a test) can reconcile the artifact's row count to the memmap's
-    declared ``n_used`` (ADR-SKM-008 Phase 3 acceptance criterion)."""
+    """Persist the full-corpus projection artifact keyed by direction-sha +
+    memmap-sha. Two per-``rowid_mm`` arrays are stored, in distinct units, so
+    the rate/exemplar consumers never confuse them (PR #65 review BLOCKER):
+
+    - ``projection`` -- the raw scalar projection onto the unit axis (the
+      matvec output; same units project_text reports as its ``projection``).
+    - ``z`` -- the genuine z-score of that projection against the direction's
+      recorded ``null_reference`` (mu0, sigma0). This is what
+      :func:`build_rate_table` / :func:`top_exemplars` threshold and rank
+      against, matching the standard-normal-quantile scale that
+      :func:`calibrate_threshold_from_direction` emits.
+
+    ``n_used`` is recorded so a consumer (or a test) can reconcile the
+    artifact's row count to the memmap's declared ``n_used`` (ADR-SKM-008
+    Phase 3 acceptance criterion)."""
     npz_path, json_path = projection_artifact_paths(
         out_dir, direction.pattern_id, direction.era
     )
     np.savez(
         npz_path,
         rowid_mm=np.asarray(rowids_mm, dtype=np.int64),
+        projection=np.asarray(projection, dtype=np.float64),
         z=np.asarray(z, dtype=np.float64),
     )
+    z = np.asarray(z, dtype=np.float64)
     manifest = {
         "header": {
             "regime": EXPECTED_PROJECTION_REGIME,
@@ -1522,6 +1536,7 @@ class Projection:
     n_used: int
     rowid_mm: np.ndarray
     z: np.ndarray
+    projection: Optional[np.ndarray] = None
     header: Dict[str, Any] = field(default_factory=dict)
     manifest: Dict[str, Any] = field(default_factory=dict)
 
@@ -1568,6 +1583,13 @@ def load_projection(json_path: str) -> Projection:
         if key not in npz:
             raise ValueError(f"Projection npz {npz_path} has no {key!r} array.")
 
+    # 'projection' (the raw scalar projection) is persisted alongside 'z' (its
+    # null-referenced z-score) since PR #65; tolerate its absence in a
+    # pre-split artifact rather than hard-failing on a legacy file.
+    raw_projection = (
+        np.asarray(npz["projection"], dtype=np.float64) if "projection" in npz else None
+    )
+
     return Projection(
         embedding_model_id=header["embedding_model_id"],
         source_memmap_sha256=header["source_memmap_sha256"],
@@ -1577,6 +1599,7 @@ def load_projection(json_path: str) -> Projection:
         n_used=int(header["n_used"]),
         rowid_mm=np.asarray(npz["rowid_mm"], dtype=np.int64),
         z=np.asarray(npz["z"], dtype=np.float64),
+        projection=raw_projection,
         header=header,
         manifest=manifest,
     )
@@ -1820,6 +1843,10 @@ def fetch_chunk_rows_for_rowids(
     if not rowids_mm:
         return []
     placeholders = ",".join("?" for _ in rowids_mm)
+    # c.source AS channel: the channel alias maps to chunk.source, confirmed
+    # against tvi's real corpus.db chunk schema (column 'source', values
+    # claude_code/gemini_exporter/claude_export/dot_claude_host) -- ADR-TVI-008
+    # boundary contract.
     query = (
         "SELECT vs.rowid_mm AS rowid_mm, c.era AS era, c.source AS channel, "
         "c.speaker AS speaker, c.chunk_id AS chunk_id "
@@ -1993,9 +2020,34 @@ async def project_corpus(manager: StateManager, args: Dict[str, Any]) -> Dict[st
         return {"error": str(exc)}
 
     centered = mean_center(vecs, calibration.mu)
-    z = project_vectors(centered, direction.unit_axis)
+    # Raw scalar projection onto the axis (matvec output, project_text's
+    # 'projection' units). This is NOT yet on the z-scale the rate/exemplar
+    # threshold lives on -- z-score it against the direction's recorded
+    # null_reference before persisting, so build_rate_table/top_exemplars
+    # read a genuine z (PR #65 review BLOCKER: previously the raw projection
+    # was stored under 'z' and thresholded against a standard-normal quantile,
+    # a unit mismatch). This mirrors project_text's null-referencing pattern.
+    projection = project_vectors(centered, direction.unit_axis)
+    null_ref = direction.manifest.get("null_reference", {}) or {}
+    if "mu0" not in null_ref or "sigma0" not in null_ref:
+        return {
+            "error": (
+                "direction artifact has no recorded null_reference (mu0, "
+                "sigma0); cannot z-score the corpus projection. Re-run "
+                "initialize_direction so the D3 null calibration is persisted."
+            )
+        }
+    try:
+        z = z_scores(projection, null_ref["mu0"], null_ref["sigma0"])
+    except DirectionRefusal as exc:
+        # Consistent with z_scores' existing zero-sigma refusal (and
+        # project_text's z_error path): a degenerate null cannot be z-scored,
+        # so refuse rather than persist a misleading raw-as-z artifact.
+        return {"error": str(exc)}
 
-    npz_path, json_path = write_projection_artifact(out_dir, direction, rowids_mm, z, n_used)
+    npz_path, json_path = write_projection_artifact(
+        out_dir, direction, rowids_mm, projection, z, n_used
+    )
 
     result = {
         "projection_ref": json_path,
@@ -2006,6 +2058,8 @@ async def project_corpus(manager: StateManager, args: Dict[str, Any]) -> Dict[st
         "n_used": n_used,
         "z_mean": round(float(np.mean(z)), 6) if z.size else None,
         "z_std": round(float(np.std(z)), 6) if z.size else None,
+        "projection_mean": round(float(np.mean(projection)), 6) if projection.size else None,
+        "projection_std": round(float(np.std(projection)), 6) if projection.size else None,
         "verdict": direction.verdict,
     }
     if allow_override and direction.verdict != "usable":
