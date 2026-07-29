@@ -21,7 +21,7 @@ from mcp.types import Tool, TextContent
 
 from semantic_kinematics.mcp.state_manager import StateManager
 from semantic_kinematics.mcp.commands import (
-    embeddings, classification, trajectory, model, axis_alignment
+    embeddings, classification, trajectory, model, axis_alignment, direction
 )
 
 
@@ -39,6 +39,7 @@ async def list_tools() -> List[Tool]:
     tools.extend(trajectory.get_tools())
     tools.extend(axis_alignment.get_tools())
     tools.extend(model.get_tools())
+    tools.extend(direction.get_tools())
     return tools
 
 
@@ -69,6 +70,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         # Axis-alignment tool
         elif name == "analyze_axis_alignment":
             result = await axis_alignment.analyze_axis_alignment(state_manager, arguments)
+
+        # Direction-probe tool (ADR-SKM-008 Phase 2)
+        elif name == "initialize_direction":
+            result = await direction.initialize_direction(state_manager, arguments)
 
         # Model management tools
         elif name == "model_status":
