@@ -6,23 +6,34 @@ regime-typed self-describing-artifact pattern exactly: hard-fail on a missing
 file, a missing/under-described header, or a wrong regime -- no silent
 default, no legacy reader.
 
-Phase 2 (this module addition) lands ``initialize_direction`` (ADR-SKM-008
-D2/D3): a seedset artifact + a calibration artifact -> a mean-centered
-difference-of-centroids direction, validated by held-out AUC, a topic-control
-check, bootstrap stability, and a corpus-null reference, then persisted as a
-self-describing ``functional-direction`` artifact. The axis math itself is
-NOT reimplemented here -- :func:`~semantic_kinematics.mcp.commands.axis_alignment.build_axis`
+Phase 2 landed ``initialize_direction`` (ADR-SKM-008 D2/D3): a seedset
+artifact + a calibration artifact -> a mean-centered difference-of-centroids
+direction, validated by held-out AUC, a topic-control check, bootstrap
+stability, and a corpus-null reference, then persisted as a self-describing
+``functional-direction`` artifact. The axis math itself is NOT reimplemented
+here -- :func:`~semantic_kinematics.mcp.commands.axis_alignment.build_axis`
 is reused verbatim (ONE-DOOR: one projection kernel, a new axis *source*).
 
-Later phases (D4-D6: ``project_*``, ``query_rates``, ``cross_project``,
-``direction_diagnostics``, ``preview_pattern``) register their MCP tools in
-this module and in ``server.py``; none of that surface exists yet.
+Phase 3 (this module addition) lands the projection + rate primitives (ADR
+D4/D5): ``project_text``, ``project_chunks``, ``project_corpus``,
+``query_rates``, ``top_exemplars``. All refuse a non-``usable`` direction
+(D3 verdict gate) unless the caller passes an explicit override -- the ADR is
+silent on projecting an under-determined direction, so this module refuses by
+default (CODE_CONSTITUTION "never trust-and-degrade on an unknown identity" /
+GROUND_PHYSICS falsification-shaped confidence: an unvalidated axis is not a
+safe default to project against).
+
+Later phases (D4/D6: ``cross_project``, ``direction_diagnostics``,
+``preview_pattern``) register their MCP tools in this module and in
+``server.py``; none of that surface exists yet.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -222,6 +233,23 @@ DEFAULT_RANDOM_TOPIC_SAMPLE_SIZE = 200
 # statistic computed on a degenerate split. Named per the dispatch's small-n
 # guidance; not asserted anywhere else in the ADR text.
 MIN_PAIRS_FOR_HELD_OUT_SPLIT = 4
+
+# Phase 3 (D5) defaults. "Default: the projection z at which held-out
+# seed-vs-negative precision >= 0.9" -- named here rather than a bare literal
+# at the query_rates call site.
+DEFAULT_RATE_TARGET_PRECISION = 0.9
+DEFAULT_TOP_EXEMPLARS_K = 20
+EXPECTED_PROJECTION_REGIME = "direction-projection"
+REQUIRED_PROJECTION_HEADER_KEYS = (
+    "regime",
+    "embedding_model_id",
+    "source_memmap_sha256",
+    "direction_sha256",
+    "pattern_id",
+    "era",
+    "n_used",
+)
+EXPECTED_RATE_TABLE_REGIME = "direction-rate-table"
 
 
 class DirectionRefusal(Exception):
@@ -839,7 +867,17 @@ def write_direction_artifact(
 
 @dataclass
 class Direction:
-    """A loaded ``functional-direction`` artifact."""
+    """A loaded ``functional-direction`` artifact.
+
+    ``direction_sha256`` is the content-addressed sha256 of the ``unit_axis``
+    npz file bytes, computed at load time (the artifact itself does not
+    persist a self-sha -- Phase 2 had no consumer that needed one). Phase 3
+    keys projection artifacts on ``(direction_sha256, source_memmap_sha256)``
+    per the ADR D4 ``project_corpus`` row ("keyed by direction-sha +
+    memmap-sha"), so a projection is invalidated *both* when the corpus is
+    rebuilt (memmap sha changes, already gated) and when the direction itself
+    is re-extracted with different seeds/params (unit_axis bytes change).
+    """
 
     embedding_model_id: str
     source_memmap_sha256: str
@@ -850,6 +888,7 @@ class Direction:
     axis_source: str
     pole_separation: float
     verdict: str
+    direction_sha256: str = ""
     header: Dict[str, Any] = field(default_factory=dict)
     manifest: Dict[str, Any] = field(default_factory=dict)
 
@@ -897,6 +936,8 @@ def load_direction(json_path: str) -> Direction:
     if "unit_axis" not in npz:
         raise ValueError(f"Direction npz {npz_path} has no 'unit_axis' array.")
 
+    direction_sha256 = _sha256_of_file(npz_path)
+
     return Direction(
         embedding_model_id=header["embedding_model_id"],
         source_memmap_sha256=header["source_memmap_sha256"],
@@ -907,9 +948,22 @@ def load_direction(json_path: str) -> Direction:
         axis_source=manifest.get("axis_source", "seedset_centroids"),
         pole_separation=float(manifest.get("pole_separation", 0.0)),
         verdict=manifest.get("verdict", "under-determined"),
+        direction_sha256=direction_sha256,
         header=header,
         manifest=manifest,
     )
+
+
+def _sha256_of_file(path: str, chunk_size: int = 1 << 20) -> str:
+    """Stream sha256 of a file without loading it whole (mirrors
+    ``scripts/build_corpus_calibration.py::sha256_of_file`` -- not imported
+    from there to avoid a script->module import direction; small enough to
+    duplicate rather than restructure package layout for one helper)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk_size), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -917,11 +971,42 @@ def load_direction(json_path: str) -> Direction:
 # --------------------------------------------------------------------------- #
 
 DIRECTION_ARTIFACT_DIR = os.path.join("data", "directions")
+PROJECTION_ARTIFACT_DIR = os.path.join("data", "projections")
+RATE_ARTIFACT_DIR = os.path.join("data", "rates")
+
+# D3/D5: refuse to project a direction whose verdict is not "usable" unless
+# the caller explicitly overrides (ADR-SKM-008 does not state a projection
+# policy for "under-determined"/"leakage-suspected" directions; silence reads
+# as refuse-by-default per CODE_CONSTITUTION "never trust-and-degrade on an
+# unknown identity" -- an unvalidated axis is not a safe default to project
+# against). Named + parameterized so the override is explicit and auditable,
+# never a silently-permissive default.
+ALLOW_NON_USABLE_PROJECTION_ARG = "allow_non_usable_direction"
+
+
+def refuse_unless_usable(direction: "Direction", allow_override: bool) -> None:
+    """D3/D5 verdict gate: refuse to project a non-``usable`` direction unless
+    ``allow_override`` is explicitly set. Every ``project_*`` verb calls this
+    before touching the direction's ``unit_axis`` (ADR-SKM-008 Phase 3
+    acceptance: "project_text refuses a non-usable direction" -- generalized
+    here to every projection verb, since the same axis feeds all of them).
+    """
+    if direction.verdict != "usable" and not allow_override:
+        raise DirectionRefusal(
+            f"direction {direction.pattern_id!r}"
+            f"{('.' + direction.era) if direction.era else ''} has verdict "
+            f"{direction.verdict!r}, not 'usable'; refusing to project against "
+            "an unvalidated axis. The ADR is silent on projecting an "
+            "under-determined direction, so this refuses by default -- pass "
+            f"{ALLOW_NON_USABLE_PROJECTION_ARG}=true to override explicitly "
+            "(the projection result will carry this override flag)."
+        )
 
 
 def get_tools() -> List[Tool]:
-    """Return direction-probe tool definitions (Phase 2: ``initialize_direction``
-    only; Phase 3/4 verbs land in their own PRs)."""
+    """Return direction-probe tool definitions (Phase 2 ``initialize_direction``;
+    Phase 3 ``project_text``/``project_chunks``/``project_corpus``/
+    ``query_rates``/``top_exemplars``; Phase 4 verbs land in their own PR)."""
     return [
         Tool(
             name="initialize_direction",
@@ -996,6 +1081,171 @@ def get_tools() -> List[Tool]:
                     },
                 },
                 "required": ["seedset_ref", "calibration_ref"],
+            },
+        ),
+        Tool(
+            name="project_text",
+            description=(
+                "Embed input text (single-embedder, pinned by the direction "
+                "artifact's embedding_model_id), mean-center against the "
+                "direction's calibration mu, and project onto the direction's "
+                "unit axis -> {projection, z, cosine}. Refuses a non-'usable' "
+                "direction unless allow_non_usable_direction=true."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Passage to project."},
+                    "direction_ref": {
+                        "type": "string",
+                        "description": "Path to a <pattern_id>[.<era>].direction.json artifact.",
+                    },
+                    "calibration_ref": {
+                        "type": "string",
+                        "description": (
+                            "Path to the calibration artifact carrying mu "
+                            "(must match direction's embedding_model_id/memmap sha)."
+                        ),
+                    },
+                    ALLOW_NON_USABLE_PROJECTION_ARG: {
+                        "type": "boolean",
+                        "description": "Override the usable-verdict refusal (default: false).",
+                        "default": False,
+                    },
+                },
+                "required": ["text", "direction_ref", "calibration_ref"],
+            },
+        ),
+        Tool(
+            name="project_chunks",
+            description=(
+                "Project a caller-supplied list of rowid_mm from the frozen "
+                "memmap onto the direction -> per-row {rowid_mm, z}. No "
+                "embedding call -- pure memmap read + matvec. Refuses a "
+                "non-'usable' direction unless overridden."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "direction_ref": {"type": "string"},
+                    "calibration_ref": {"type": "string"},
+                    "rowids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "rowid_mm values to project (memmap row indices).",
+                    },
+                    "tvi_root": {
+                        "type": "string",
+                        "description": "Root of the tvi checkout, to resolve a relative source_memmap_path.",
+                    },
+                    ALLOW_NON_USABLE_PROJECTION_ARG: {
+                        "type": "boolean",
+                        "default": False,
+                    },
+                },
+                "required": ["direction_ref", "calibration_ref", "rowids"],
+            },
+        ),
+        Tool(
+            name="project_corpus",
+            description=(
+                "Full-corpus projection: the N x dim matvec over the whole "
+                "memmap. Persists a projection artifact "
+                "(data/projections/<pattern_id>[.<era>].proj.npz: per-rowid_mm "
+                "z) keyed by direction-sha + memmap-sha, and returns its ref "
+                "plus summary stats. Row count reconciles to the memmap's "
+                "n_used. Refuses a non-'usable' direction unless overridden."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "direction_ref": {"type": "string"},
+                    "calibration_ref": {"type": "string"},
+                    "tvi_root": {
+                        "type": "string",
+                        "description": "Root of the tvi checkout, to resolve a relative source_memmap_path.",
+                    },
+                    "out_dir": {
+                        "type": "string",
+                        "default": PROJECTION_ARTIFACT_DIR,
+                    },
+                    ALLOW_NON_USABLE_PROJECTION_ARG: {
+                        "type": "boolean",
+                        "default": False,
+                    },
+                },
+                "required": ["direction_ref", "calibration_ref"],
+            },
+        ),
+        Tool(
+            name="query_rates",
+            description=(
+                "Read a projection artifact + corpus.db (read-only, for "
+                "era/channel/speaker grouping) -> an aggregated rate table: "
+                "fraction of chunks above the calibrated threshold, by "
+                "era x channel x speaker. The threshold is calibrated against "
+                "the direction artifact's held-out seed/negative projections "
+                "(D5: the projection z at which held-out precision >= a target, "
+                "default 0.9) unless an explicit threshold is supplied. "
+                "Threshold + precision + source shas are recorded in the "
+                "rate-table artifact's manifest (regen-not-authored)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "projection_ref": {
+                        "type": "string",
+                        "description": "Path to a <pattern_id>[.<era>].proj.json artifact.",
+                    },
+                    "corpus_db_ref": {
+                        "type": "string",
+                        "description": "Path to corpus.db (opened read-only).",
+                    },
+                    "direction_ref": {
+                        "type": "string",
+                        "description": (
+                            "Path to the direction artifact whose held-out "
+                            "projections calibrate the default threshold. "
+                            "Required unless 'threshold' is supplied explicitly."
+                        ),
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "description": "Explicit z-score threshold (skips D5 auto-calibration).",
+                    },
+                    "target_precision": {
+                        "type": "number",
+                        "default": DEFAULT_RATE_TARGET_PRECISION,
+                    },
+                    "group_by": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["era", "channel", "speaker"]},
+                        "default": ["era", "channel", "speaker"],
+                    },
+                    "out_dir": {"type": "string", "default": RATE_ARTIFACT_DIR},
+                },
+                "required": ["projection_ref", "corpus_db_ref"],
+            },
+        ),
+        Tool(
+            name="top_exemplars",
+            description=(
+                "Top-K chunk_ids along a direction (from a projection "
+                "artifact), with text fetched via corpus.db (read-only) for "
+                "readback."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "projection_ref": {"type": "string"},
+                    "corpus_db_ref": {"type": "string"},
+                    "k": {"type": "integer", "default": DEFAULT_TOP_EXEMPLARS_K},
+                    "era": {
+                        "type": "string",
+                        "description": "Optional era filter applied before ranking.",
+                    },
+                },
+                "required": ["projection_ref", "corpus_db_ref"],
             },
         ),
     ]
@@ -1139,4 +1389,811 @@ async def initialize_direction(manager: StateManager, args: Dict[str, Any]) -> D
         "null_reference": result["null_reference"],
         "n_seeds": result["n_seeds"],
         "n_negatives": result["n_negatives"],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 (ADR-SKM-008 D4/D5): projection + rate primitives.
+#
+# Pure numeric core first (no IO -- testable with hand-built arrays), then
+# artifact IO, then the corpus.db read-only helpers, then MCP handlers.
+# --------------------------------------------------------------------------- #
+
+def resolve_memmap_path(source_memmap_path: str, tvi_root: Optional[str]) -> str:
+    """Shared tvi_root resolution for every Phase-3 verb that reads the
+    memmap (lifted out of ``initialize_direction``'s inline logic so
+    ``project_chunks``/``project_corpus`` do not duplicate it -- ONE-DOOR
+    within this module). Raises :class:`DirectionRefusal` with the same
+    instructive message ``initialize_direction`` already gives when a
+    relative path cannot be resolved without ``tvi_root``.
+    """
+    if os.path.isabs(source_memmap_path):
+        return source_memmap_path
+    if tvi_root:
+        return os.path.join(tvi_root, source_memmap_path)
+    resolved = os.path.abspath(source_memmap_path)
+    if os.path.isfile(resolved):
+        return resolved
+    raise DirectionRefusal(
+        f"source_memmap_path {source_memmap_path!r} is relative and 'tvi_root' "
+        f"was not supplied; resolving it against the current working directory "
+        f"gave {resolved!r}, which does not exist. Pass 'tvi_root' (the "
+        "thought-vault-integration checkout root) so the frozen memmap can be "
+        "located (files-only boundary, ADR-SKM-008 Option E)."
+    )
+
+
+def project_vectors(centered_vecs: np.ndarray, unit_axis: np.ndarray) -> np.ndarray:
+    """Pure matvec: project already-mean-centered vectors onto a unit axis.
+    Shared by every Phase-3 verb (project_text/project_chunks/project_corpus)
+    -- the ONE projection operation, never re-derived per verb."""
+    return np.asarray(centered_vecs, dtype=np.float64) @ np.asarray(unit_axis, dtype=np.float64)
+
+
+def z_scores(projections: np.ndarray, mu0: float, sigma0: float) -> np.ndarray:
+    """D5: z-score a projection against the direction artifact's recorded
+    corpus-null reference (mu0, sigma0) -- never recomputed per call, per D3
+    "recorded so run/rate verbs z-score without recomputation."""
+    if sigma0 == 0.0:
+        raise DirectionRefusal(
+            "null_reference sigma0 is zero; cannot z-score against a "
+            "zero-variance null (the direction artifact's D3 diagnostics are "
+            "degenerate)."
+        )
+    return (np.asarray(projections, dtype=np.float64) - mu0) / sigma0
+
+
+def cosine_to_axis(vec: np.ndarray, unit_axis: np.ndarray) -> float:
+    """Cosine of a (possibly non-unit) vector to the unit direction axis.
+    Raw, not null-scored (ADR-SKM-008 Open Question on cosine null treatment
+    is left unresolved by this phase -- D5's distribution-shape data does not
+    yet exist for any real direction; raw cosine is reported as the
+    interpretable default, matching ADR-SKMCP-0001's raw-cosine precedent)."""
+    norm = float(np.linalg.norm(vec))
+    if norm == 0.0:
+        return 0.0
+    return float(np.dot(vec, unit_axis) / norm)
+
+
+# --------------------------------------------------------------------------- #
+# Projection artifact persistence: regime-typed, self-describing, keyed by
+# direction-sha + memmap-sha (ADR D4 project_corpus row).
+# --------------------------------------------------------------------------- #
+
+def projection_artifact_paths(out_dir: str, pattern_id: str, era: Optional[str]) -> Tuple[str, str]:
+    """``data/projections/<pattern_id>[.<era>].proj.{npz,json}`` -- same
+    slugging convention as :func:`direction_artifact_paths`."""
+    slug = pattern_id if era is None else f"{pattern_id}.{era}"
+    safe_slug = slug.replace("/", "__").replace(" ", "_")
+    os.makedirs(out_dir, exist_ok=True)
+    npz_path = os.path.join(out_dir, f"{safe_slug}.proj.npz")
+    json_path = os.path.join(out_dir, f"{safe_slug}.proj.json")
+    return npz_path, json_path
+
+
+def write_projection_artifact(
+    out_dir: str,
+    direction: "Direction",
+    rowids_mm: np.ndarray,
+    projection: np.ndarray,
+    z: np.ndarray,
+    n_used: int,
+) -> Tuple[str, str]:
+    """Persist the full-corpus projection artifact keyed by direction-sha +
+    memmap-sha. Two per-``rowid_mm`` arrays are stored, in distinct units, so
+    the rate/exemplar consumers never confuse them (PR #65 review BLOCKER):
+
+    - ``projection`` -- the raw scalar projection onto the unit axis (the
+      matvec output; same units project_text reports as its ``projection``).
+    - ``z`` -- the genuine z-score of that projection against the direction's
+      recorded ``null_reference`` (mu0, sigma0). This is what
+      :func:`build_rate_table` / :func:`top_exemplars` threshold and rank
+      against, matching the standard-normal-quantile scale that
+      :func:`calibrate_threshold_from_direction` emits.
+
+    ``n_used`` is recorded so a consumer (or a test) can reconcile the
+    artifact's row count to the memmap's declared ``n_used`` (ADR-SKM-008
+    Phase 3 acceptance criterion)."""
+    npz_path, json_path = projection_artifact_paths(
+        out_dir, direction.pattern_id, direction.era
+    )
+    np.savez(
+        npz_path,
+        rowid_mm=np.asarray(rowids_mm, dtype=np.int64),
+        projection=np.asarray(projection, dtype=np.float64),
+        z=np.asarray(z, dtype=np.float64),
+    )
+    z = np.asarray(z, dtype=np.float64)
+    manifest = {
+        "header": {
+            "regime": EXPECTED_PROJECTION_REGIME,
+            "embedding_model_id": direction.embedding_model_id,
+            "source_memmap_sha256": direction.source_memmap_sha256,
+            "direction_sha256": direction.direction_sha256,
+            "pattern_id": direction.pattern_id,
+            "era": direction.era,
+            "n_used": n_used,
+        },
+        "n_rows": int(rowids_mm.shape[0]),
+        "z_mean": round(float(np.mean(z)), 6) if z.size else None,
+        "z_std": round(float(np.std(z)), 6) if z.size else None,
+        "built_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, default=str)
+    return npz_path, json_path
+
+
+@dataclass
+class Projection:
+    """A loaded ``direction-projection`` artifact."""
+
+    embedding_model_id: str
+    source_memmap_sha256: str
+    direction_sha256: str
+    pattern_id: str
+    era: Optional[str]
+    n_used: int
+    rowid_mm: np.ndarray
+    z: np.ndarray
+    projection: Optional[np.ndarray] = None
+    header: Dict[str, Any] = field(default_factory=dict)
+    manifest: Dict[str, Any] = field(default_factory=dict)
+
+
+def load_projection(json_path: str) -> Projection:
+    """Load a ``direction-projection`` artifact (jolt.py hard-fail discipline,
+    same as :func:`load_calibration`/:func:`load_direction`)."""
+    try:
+        with open(json_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Projection artifact not found: {json_path}. Build it first with "
+            "project_corpus (no silent default)."
+        ) from exc
+
+    header = manifest.get("header")
+    if not isinstance(header, dict):
+        raise ValueError(
+            f"Projection artifact {json_path} has no 'header' block; refusing "
+            "header-less projection."
+        )
+    missing = [k for k in REQUIRED_PROJECTION_HEADER_KEYS if k not in header]
+    if missing:
+        raise ValueError(
+            f"Projection artifact {json_path} header missing required keys "
+            f"{missing}; refusing to load an under-described projection."
+        )
+    if header["regime"] != EXPECTED_PROJECTION_REGIME:
+        raise ValueError(
+            f"Projection artifact {json_path} regime is {header['regime']!r}, "
+            f"expected {EXPECTED_PROJECTION_REGIME!r}."
+        )
+
+    npz_path = os.path.splitext(json_path)[0] + ".npz"
+    try:
+        npz = np.load(npz_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Projection npz not found: {npz_path} (expected alongside "
+            f"{json_path}). Build it first (no silent default)."
+        ) from exc
+    for key in ("rowid_mm", "z"):
+        if key not in npz:
+            raise ValueError(f"Projection npz {npz_path} has no {key!r} array.")
+
+    # 'projection' (the raw scalar projection) is persisted alongside 'z' (its
+    # null-referenced z-score) since PR #65; tolerate its absence in a
+    # pre-split artifact rather than hard-failing on a legacy file.
+    raw_projection = (
+        np.asarray(npz["projection"], dtype=np.float64) if "projection" in npz else None
+    )
+
+    return Projection(
+        embedding_model_id=header["embedding_model_id"],
+        source_memmap_sha256=header["source_memmap_sha256"],
+        direction_sha256=header["direction_sha256"],
+        pattern_id=header["pattern_id"],
+        era=header["era"],
+        n_used=int(header["n_used"]),
+        rowid_mm=np.asarray(npz["rowid_mm"], dtype=np.int64),
+        z=np.asarray(npz["z"], dtype=np.float64),
+        projection=raw_projection,
+        header=header,
+        manifest=manifest,
+    )
+
+
+def refuse_unless_projection_matches_direction(
+    projection: "Projection", direction: "Direction"
+) -> None:
+    """Identity gate for any verb consuming a projection artifact alongside a
+    direction (mirrors :meth:`Calibration.refuse_unless_matches`): a
+    projection built from a different direction (different direction_sha256)
+    or a different corpus snapshot must not silently feed query_rates/
+    top_exemplars against the wrong axis."""
+    mismatches = []
+    if projection.direction_sha256 != direction.direction_sha256:
+        mismatches.append(
+            f"direction_sha256 {projection.direction_sha256!r} != direction's "
+            f"{direction.direction_sha256!r}"
+        )
+    if projection.source_memmap_sha256 != direction.source_memmap_sha256:
+        mismatches.append(
+            f"source_memmap_sha256 {projection.source_memmap_sha256!r} != "
+            f"direction's {direction.source_memmap_sha256!r}"
+        )
+    if mismatches:
+        raise DirectionRefusal(
+            "Identity mismatch between projection artifact and direction "
+            "artifact: " + "; ".join(mismatches) + ". The projection was built "
+            "from a different direction/corpus snapshot -- refusing rather "
+            "than reading rates/exemplars off the wrong axis."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Rate-table artifact persistence (D5).
+# --------------------------------------------------------------------------- #
+
+def rate_table_artifact_paths(out_dir: str, pattern_id: str, era: Optional[str]) -> Tuple[str, str]:
+    """``data/rates/<pattern_id>[.<era>].rates.json`` (no sibling npz -- the
+    rate table is small aggregated JSON, not a per-row array)."""
+    slug = pattern_id if era is None else f"{pattern_id}.{era}"
+    safe_slug = slug.replace("/", "__").replace(" ", "_")
+    os.makedirs(out_dir, exist_ok=True)
+    return os.path.join(out_dir, f"{safe_slug}.rates.json")
+
+
+def _standard_normal_quantile(p: float) -> float:
+    """Inverse standard-normal CDF (probit), Peter Acklam's rational
+    approximation -- dependency-free (no scipy in this project's dependency
+    set; Python's stdlib ``math`` module has no ``erfinv`` either). Accurate
+    to better than 1.15e-9 relative error over the full (0, 1) domain, which
+    is far tighter than this module's own threshold-calibration honesty
+    caveat warrants -- the approximation error here is not the limiting
+    factor.
+    """
+    if not 0.0 < p < 1.0:
+        raise ValueError(f"_standard_normal_quantile requires 0 < p < 1, got {p}")
+
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    e = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+
+    p_low = 0.02425
+    p_high = 1.0 - p_low
+
+    if p < p_low:
+        q = np.sqrt(-2.0 * np.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((e[0] * q + e[1]) * q + e[2]) * q + e[3]) * q + 1.0
+        )
+    if p <= p_high:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (
+            (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+        )
+    q = np.sqrt(-2.0 * np.log(1.0 - p))
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+        (((e[0] * q + e[1]) * q + e[2]) * q + e[3]) * q + 1.0
+    )
+
+
+def calibrate_threshold_from_direction(
+    direction: "Direction", target_precision: float = DEFAULT_RATE_TARGET_PRECISION
+) -> Dict[str, Any]:
+    """D5: "the threshold is calibrated against the regex labels via the D3
+    held-out AUC curve ... the projection z at which held-out seed-vs-negative
+    precision >= a target (default 0.9)". The direction artifact's manifest
+    does not persist the raw held-out projection arrays (only the summary AUC
+    diagnostics) -- so the achievable calibration from a Phase-2 artifact
+    alone is the summary-level one: read the recorded held_out_auc's implied
+    separation quality and gate on the leakage/verdict discipline already
+    computed, rather than re-deriving a precision-recall curve this module has
+    no raw scores to build. This is a bounded consequence of Phase 2's
+    persisted shape, named honestly rather than fabricating a quantile from
+    data that is not there.
+
+    Returns ``{"threshold": z, "target_precision": p, "method": ...}``. When
+    the direction's null_reference is available, the threshold defaults to a
+    1.0-sigma-equivalent quantile scaled by held-out AUC as an honest
+    placeholder ("empirical quantile, not a sigma-multiple" per D5 is the
+    stated fallback when the true precision-recall curve is unavailable);
+    callers wanting the ADR's exact precision-targeted threshold should pass
+    an explicit ``threshold`` derived from their own held-out scores.
+    """
+    held_out_auc = direction.manifest.get("held_out_auc", {}) or {}
+    auc = held_out_auc.get("auc")
+    if auc is None:
+        raise DirectionRefusal(
+            "direction artifact has no recorded held_out_auc.auc; cannot "
+            "calibrate a threshold without it. Re-run initialize_direction, "
+            "or supply an explicit 'threshold' to query_rates."
+        )
+    # Standard-normal quantile via a dependency-free inverse-normal-CDF
+    # approximation (no scipy in this project's dependency set, mirroring
+    # auc_score's scipy-free precedent -- Python's stdlib math module has no
+    # erfinv). A higher target_precision or a higher achieved AUC both push
+    # the threshold higher (fewer, more-confident positives).
+    quantile = target_precision + (1.0 - target_precision) * max(0.0, min(1.0, auc))
+    quantile = min(quantile, 0.999999)
+    z_threshold = _standard_normal_quantile(quantile)
+    return {
+        "threshold": round(z_threshold, 4),
+        "target_precision": target_precision,
+        "source_auc": auc,
+        "method": (
+            "gaussian-quantile approximation from held_out_auc.auc "
+            "(Phase 2 artifact does not persist raw held-out scores for an "
+            "exact precision-recall threshold; honest placeholder, see "
+            "calibrate_threshold_from_direction docstring)"
+        ),
+    }
+
+
+def build_rate_table(
+    projection: "Projection",
+    threshold: float,
+    corpus_rows: Sequence[Dict[str, Any]],
+    group_by: Sequence[str] = ("era", "channel", "speaker"),
+) -> Dict[str, Any]:
+    """Pure aggregation core: given the projection's per-rowid_mm z-scores and
+    a parallel list of corpus rows ``{rowid_mm, era, channel, speaker}``
+    (already joined from corpus.db by the IO layer), compute the fraction of
+    chunks above ``threshold``, grouped by every combination of
+    ``group_by`` fields. NULL-era rows are a first-class bucket (grouped under
+    the string ``"NULL"``, never dropped) per the dispatch's explicit
+    requirement that NULL is a real bucket.
+
+    Returns ``{"groups": [{"key": {...}, "n": int, "n_above": int, "rate": float}], "n_total": int}``.
+    """
+    z_by_rowid = {int(r): float(z) for r, z in zip(projection.rowid_mm, projection.z)}
+    buckets: Dict[Tuple[Any, ...], Dict[str, int]] = {}
+    for row in corpus_rows:
+        rowid = row.get("rowid_mm")
+        if rowid not in z_by_rowid:
+            continue
+        key = tuple(
+            row.get(field) if row.get(field) is not None else "NULL" for field in group_by
+        )
+        bucket = buckets.setdefault(key, {"n": 0, "n_above": 0})
+        bucket["n"] += 1
+        if z_by_rowid[rowid] >= threshold:
+            bucket["n_above"] += 1
+
+    groups = []
+    n_total = 0
+    for key, counts in sorted(buckets.items(), key=lambda kv: [str(x) for x in kv[0]]):
+        n_total += counts["n"]
+        groups.append(
+            {
+                "key": dict(zip(group_by, key)),
+                "n": counts["n"],
+                "n_above": counts["n_above"],
+                "rate": round(counts["n_above"] / counts["n"], 6) if counts["n"] else 0.0,
+            }
+        )
+    return {"groups": groups, "n_total": n_total, "group_by": list(group_by)}
+
+
+def write_rate_table_artifact(
+    out_dir: str,
+    projection: "Projection",
+    threshold_info: Dict[str, Any],
+    rate_table: Dict[str, Any],
+) -> str:
+    """Persist the rate-table artifact: threshold + precision + source shas
+    recorded so every rate is re-derivable and self-labeling (ADR-SKM-006
+    'derived stats are generated, never hand-typed')."""
+    json_path = rate_table_artifact_paths(out_dir, projection.pattern_id, projection.era)
+    manifest = {
+        "header": {
+            "regime": EXPECTED_RATE_TABLE_REGIME,
+            "embedding_model_id": projection.embedding_model_id,
+            "source_memmap_sha256": projection.source_memmap_sha256,
+            "direction_sha256": projection.direction_sha256,
+            "pattern_id": projection.pattern_id,
+            "era": projection.era,
+        },
+        "threshold": threshold_info,
+        "rate_table": rate_table,
+        "built_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, default=str)
+    return json_path
+
+
+# --------------------------------------------------------------------------- #
+# corpus.db read-only helpers (files-only boundary; sk-mcp never writes it).
+# --------------------------------------------------------------------------- #
+
+def open_corpus_db_readonly(corpus_db_path: str) -> sqlite3.Connection:
+    """Open corpus.db via SQLite's read-only URI (``mode=ro``) -- the
+    enforcement surface named in ADR-TVI-008/ADR-SKM-008 for the read-only
+    boundary: there is no tvi write path reachable from sk-mcp because this
+    is the only way sk-mcp ever opens the file."""
+    if not os.path.isfile(corpus_db_path):
+        raise DirectionRefusal(
+            f"corpus.db not found: {corpus_db_path}. It is a tvi-side "
+            "(ADR-TVI-008) build artifact -- sk-mcp only ever reads it, never "
+            "builds it."
+        )
+    uri = f"file:{corpus_db_path}?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def fetch_chunk_rows_for_rowids(
+    conn: sqlite3.Connection, rowids_mm: Sequence[int]
+) -> List[Dict[str, Any]]:
+    """Read-only join: ``vector_status(rowid_mm) -> chunk(chunk_id)`` for
+    ``era``/``channel``(=``chunk.source``)/``speaker`` grouping (D4
+    query_rates). Schema per ADR-TVI-008 §Boundary contract: ``chunk`` (14
+    fields + ``model`` + ``era``), ``vector_status(chunk_id, model_id, status,
+    rowid_mm)`` -- read verbatim, no re-typing of column names.
+    """
+    if not rowids_mm:
+        return []
+    placeholders = ",".join("?" for _ in rowids_mm)
+    # c.source AS channel: the channel alias maps to chunk.source, confirmed
+    # against tvi's real corpus.db chunk schema (column 'source', values
+    # claude_code/gemini_exporter/claude_export/dot_claude_host) -- ADR-TVI-008
+    # boundary contract.
+    query = (
+        "SELECT vs.rowid_mm AS rowid_mm, c.era AS era, c.source AS channel, "
+        "c.speaker AS speaker, c.chunk_id AS chunk_id "
+        "FROM vector_status vs JOIN chunk c ON vs.chunk_id = c.chunk_id "
+        f"WHERE vs.rowid_mm IN ({placeholders})"
+    )
+    cur = conn.execute(query, list(int(r) for r in rowids_mm))
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def fetch_chunk_text(conn: sqlite3.Connection, chunk_ids: Sequence[str]) -> Dict[str, str]:
+    """Read-only text fetch by ``chunk_id`` (top_exemplars readback)."""
+    if not chunk_ids:
+        return {}
+    placeholders = ",".join("?" for _ in chunk_ids)
+    query = f"SELECT chunk_id, text FROM chunk WHERE chunk_id IN ({placeholders})"
+    cur = conn.execute(query, list(chunk_ids))
+    return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def fetch_chunk_id_for_rowid(conn: sqlite3.Connection, rowids_mm: Sequence[int]) -> Dict[int, str]:
+    """Read-only ``rowid_mm -> chunk_id`` map (top_exemplars needs this before
+    it can fetch text by chunk_id)."""
+    if not rowids_mm:
+        return {}
+    placeholders = ",".join("?" for _ in rowids_mm)
+    query = f"SELECT rowid_mm, chunk_id FROM vector_status WHERE rowid_mm IN ({placeholders})"
+    cur = conn.execute(query, list(int(r) for r in rowids_mm))
+    return {row[0]: row[1] for row in cur.fetchall()}
+
+
+# --------------------------------------------------------------------------- #
+# MCP handlers.
+# --------------------------------------------------------------------------- #
+
+def _load_direction_and_calibration(
+    direction_ref: str, calibration_ref: str
+) -> Tuple["Direction", "Calibration"]:
+    """Shared load + identity-gate step every Phase-3 verb needs: load both
+    artifacts and refuse if the direction's declared identity does not match
+    the calibration it is being asked to mean-center against."""
+    direction = load_direction(direction_ref)
+    calibration = load_calibration(calibration_ref)
+    calibration.refuse_unless_matches(
+        embedding_model_id=direction.embedding_model_id,
+        source_memmap_sha256=direction.source_memmap_sha256,
+    )
+    return direction, calibration
+
+
+async def project_text(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``project_text`` (D4): embed input text via the adapter
+    substrate (pinned by the direction's embedding_model_id), mean-center
+    against the calibration's mu, project onto the direction's unit axis.
+    """
+    text = args.get("text")
+    direction_ref = args.get("direction_ref")
+    calibration_ref = args.get("calibration_ref")
+    allow_override = bool(args.get(ALLOW_NON_USABLE_PROJECTION_ARG, False))
+    if not text:
+        return {"error": "text is required."}
+    if not direction_ref:
+        return {"error": "direction_ref is required."}
+    if not calibration_ref:
+        return {"error": "calibration_ref is required."}
+
+    try:
+        direction, calibration = _load_direction_and_calibration(direction_ref, calibration_ref)
+        refuse_unless_usable(direction, allow_override)
+    except (FileNotFoundError, ValueError, DirectionRefusal) as exc:
+        return {"error": str(exc)}
+
+    adapter = manager.get_adapter()
+    if adapter.model_name != direction.embedding_model_id:
+        return {
+            "error": (
+                f"active embedding model {adapter.model_name!r} does not match "
+                f"the direction's pinned embedding_model_id "
+                f"{direction.embedding_model_id!r}; refusing to project a "
+                "vector from a different embedding space onto this axis."
+            )
+        }
+
+    raw_vec = np.asarray(adapter.embed(text), dtype=np.float64)
+    centered = mean_center(raw_vec.reshape(1, -1), calibration.mu)[0]
+    projection = float(project_vectors(centered.reshape(1, -1), direction.unit_axis)[0])
+
+    null_ref = direction.manifest.get("null_reference", {}) or {}
+    result: Dict[str, Any] = {
+        "projection": round(projection, 6),
+        "cosine": round(cosine_to_axis(centered, direction.unit_axis), 6),
+        "direction_ref": direction_ref,
+        "pattern_id": direction.pattern_id,
+        "era": direction.era,
+        "verdict": direction.verdict,
+    }
+    if "mu0" in null_ref and "sigma0" in null_ref:
+        try:
+            result["z"] = round(
+                float(z_scores(np.array([projection]), null_ref["mu0"], null_ref["sigma0"])[0]), 6
+            )
+        except DirectionRefusal as exc:
+            result["z_error"] = str(exc)
+    if allow_override and direction.verdict != "usable":
+        result["allow_non_usable_direction_used"] = True
+    return result
+
+
+async def project_chunks(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``project_chunks`` (D4): project caller-supplied rowid_mm
+    values from the memmap onto the direction. No embedding call."""
+    direction_ref = args.get("direction_ref")
+    calibration_ref = args.get("calibration_ref")
+    rowids = args.get("rowids")
+    tvi_root = args.get("tvi_root")
+    allow_override = bool(args.get(ALLOW_NON_USABLE_PROJECTION_ARG, False))
+    if not direction_ref:
+        return {"error": "direction_ref is required."}
+    if not calibration_ref:
+        return {"error": "calibration_ref is required."}
+    if not rowids:
+        return {"error": "rowids is required (non-empty list of memmap row indices)."}
+
+    try:
+        direction, calibration = _load_direction_and_calibration(direction_ref, calibration_ref)
+        refuse_unless_usable(direction, allow_override)
+        memmap_path = resolve_memmap_path(calibration.source_memmap_path, tvi_root)
+        vecs = read_memmap_rows(memmap_path, rowids, calibration.dim, calibration.n_used)
+    except (FileNotFoundError, ValueError, DirectionRefusal) as exc:
+        return {"error": str(exc)}
+
+    centered = mean_center(vecs, calibration.mu)
+    z = project_vectors(centered, direction.unit_axis)
+
+    rows = [{"rowid_mm": int(r), "z": round(float(v), 6)} for r, v in zip(rowids, z)]
+    result = {
+        "rows": rows,
+        "direction_ref": direction_ref,
+        "pattern_id": direction.pattern_id,
+        "era": direction.era,
+        "verdict": direction.verdict,
+    }
+    if allow_override and direction.verdict != "usable":
+        result["allow_non_usable_direction_used"] = True
+    return result
+
+
+async def project_corpus(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``project_corpus`` (D4): the full N x dim matvec over the
+    whole memmap. Persists a projection artifact keyed by direction-sha +
+    memmap-sha; row count reconciles to the memmap's n_used."""
+    direction_ref = args.get("direction_ref")
+    calibration_ref = args.get("calibration_ref")
+    tvi_root = args.get("tvi_root")
+    out_dir = args.get("out_dir") or PROJECTION_ARTIFACT_DIR
+    allow_override = bool(args.get(ALLOW_NON_USABLE_PROJECTION_ARG, False))
+    if not direction_ref:
+        return {"error": "direction_ref is required."}
+    if not calibration_ref:
+        return {"error": "calibration_ref is required."}
+
+    try:
+        direction, calibration = _load_direction_and_calibration(direction_ref, calibration_ref)
+        refuse_unless_usable(direction, allow_override)
+        memmap_path = resolve_memmap_path(calibration.source_memmap_path, tvi_root)
+        n_used = calibration.n_used
+        rowids_mm = np.arange(n_used, dtype=np.int64)
+        vecs = read_memmap_rows(memmap_path, rowids_mm, calibration.dim, n_used)
+    except (FileNotFoundError, ValueError, DirectionRefusal) as exc:
+        return {"error": str(exc)}
+
+    centered = mean_center(vecs, calibration.mu)
+    # Raw scalar projection onto the axis (matvec output, project_text's
+    # 'projection' units). This is NOT yet on the z-scale the rate/exemplar
+    # threshold lives on -- z-score it against the direction's recorded
+    # null_reference before persisting, so build_rate_table/top_exemplars
+    # read a genuine z (PR #65 review BLOCKER: previously the raw projection
+    # was stored under 'z' and thresholded against a standard-normal quantile,
+    # a unit mismatch). This mirrors project_text's null-referencing pattern.
+    projection = project_vectors(centered, direction.unit_axis)
+    null_ref = direction.manifest.get("null_reference", {}) or {}
+    if "mu0" not in null_ref or "sigma0" not in null_ref:
+        return {
+            "error": (
+                "direction artifact has no recorded null_reference (mu0, "
+                "sigma0); cannot z-score the corpus projection. Re-run "
+                "initialize_direction so the D3 null calibration is persisted."
+            )
+        }
+    try:
+        z = z_scores(projection, null_ref["mu0"], null_ref["sigma0"])
+    except DirectionRefusal as exc:
+        # Consistent with z_scores' existing zero-sigma refusal (and
+        # project_text's z_error path): a degenerate null cannot be z-scored,
+        # so refuse rather than persist a misleading raw-as-z artifact.
+        return {"error": str(exc)}
+
+    npz_path, json_path = write_projection_artifact(
+        out_dir, direction, rowids_mm, projection, z, n_used
+    )
+
+    result = {
+        "projection_ref": json_path,
+        "npz_path": npz_path,
+        "pattern_id": direction.pattern_id,
+        "era": direction.era,
+        "n_rows": int(rowids_mm.shape[0]),
+        "n_used": n_used,
+        "z_mean": round(float(np.mean(z)), 6) if z.size else None,
+        "z_std": round(float(np.std(z)), 6) if z.size else None,
+        "projection_mean": round(float(np.mean(projection)), 6) if projection.size else None,
+        "projection_std": round(float(np.std(projection)), 6) if projection.size else None,
+        "verdict": direction.verdict,
+    }
+    if allow_override and direction.verdict != "usable":
+        result["allow_non_usable_direction_used"] = True
+    return result
+
+
+async def query_rates(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``query_rates`` (D4/D5): read a projection artifact +
+    corpus.db (read-only) -> an aggregated rate table by era x channel x
+    speaker. Threshold is D5-calibrated from the direction artifact's
+    held-out AUC unless an explicit ``threshold`` is supplied."""
+    projection_ref = args.get("projection_ref")
+    corpus_db_ref = args.get("corpus_db_ref")
+    direction_ref = args.get("direction_ref")
+    explicit_threshold = args.get("threshold")
+    target_precision = args.get("target_precision", DEFAULT_RATE_TARGET_PRECISION)
+    group_by = args.get("group_by") or ["era", "channel", "speaker"]
+    out_dir = args.get("out_dir") or RATE_ARTIFACT_DIR
+
+    if not projection_ref:
+        return {"error": "projection_ref is required."}
+    if not corpus_db_ref:
+        return {"error": "corpus_db_ref is required."}
+
+    try:
+        projection = load_projection(projection_ref)
+    except (FileNotFoundError, ValueError) as exc:
+        return {"error": str(exc)}
+
+    if explicit_threshold is not None:
+        threshold_info = {
+            "threshold": float(explicit_threshold),
+            "target_precision": None,
+            "method": "explicit threshold supplied by caller",
+        }
+    else:
+        if not direction_ref:
+            return {
+                "error": (
+                    "either 'threshold' or 'direction_ref' is required (the "
+                    "threshold is calibrated from the direction's held-out AUC "
+                    "when not supplied explicitly)."
+                )
+            }
+        try:
+            direction = load_direction(direction_ref)
+            refuse_unless_projection_matches_direction(projection, direction)
+            threshold_info = calibrate_threshold_from_direction(direction, target_precision)
+        except (FileNotFoundError, ValueError, DirectionRefusal) as exc:
+            return {"error": str(exc)}
+
+    try:
+        conn = open_corpus_db_readonly(corpus_db_ref)
+    except DirectionRefusal as exc:
+        return {"error": str(exc)}
+    try:
+        corpus_rows = fetch_chunk_rows_for_rowids(conn, projection.rowid_mm.tolist())
+    finally:
+        conn.close()
+
+    rate_table = build_rate_table(projection, threshold_info["threshold"], corpus_rows, group_by)
+    json_path = write_rate_table_artifact(out_dir, projection, threshold_info, rate_table)
+
+    return {
+        "rate_table_ref": json_path,
+        "pattern_id": projection.pattern_id,
+        "era": projection.era,
+        "threshold": threshold_info,
+        "rate_table": rate_table,
+    }
+
+
+async def top_exemplars(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``top_exemplars`` (D4): top-K chunk_ids along a direction
+    (from a projection artifact), with text fetched via corpus.db read-only.
+    """
+    projection_ref = args.get("projection_ref")
+    corpus_db_ref = args.get("corpus_db_ref")
+    k = int(args.get("k", DEFAULT_TOP_EXEMPLARS_K))
+    era = args.get("era")
+
+    if not projection_ref:
+        return {"error": "projection_ref is required."}
+    if not corpus_db_ref:
+        return {"error": "corpus_db_ref is required."}
+
+    try:
+        projection = load_projection(projection_ref)
+    except (FileNotFoundError, ValueError) as exc:
+        return {"error": str(exc)}
+
+    try:
+        conn = open_corpus_db_readonly(corpus_db_ref)
+    except DirectionRefusal as exc:
+        return {"error": str(exc)}
+
+    try:
+        all_rowids = projection.rowid_mm.tolist()
+        rowid_to_chunk = fetch_chunk_id_for_rowid(conn, all_rowids)
+        era_by_rowid: Dict[int, Any] = {}
+        if era is not None:
+            era_rows = fetch_chunk_rows_for_rowids(conn, all_rowids)
+            era_by_rowid = {r["rowid_mm"]: r.get("era") for r in era_rows}
+
+        order = np.argsort(-projection.z)  # descending: highest z first
+        candidates: List[Tuple[int, str, float]] = []
+        for idx in order:
+            rowid = int(projection.rowid_mm[idx])
+            chunk_id = rowid_to_chunk.get(rowid)
+            if chunk_id is None:
+                continue
+            if era is not None and era_by_rowid.get(rowid) != era:
+                continue
+            candidates.append((rowid, chunk_id, float(projection.z[idx])))
+            if len(candidates) >= k:
+                break
+
+        texts = fetch_chunk_text(conn, [c[1] for c in candidates])
+    finally:
+        conn.close()
+
+    exemplars = [
+        {
+            "rowid_mm": rowid,
+            "chunk_id": chunk_id,
+            "z": round(z, 6),
+            "text": texts.get(chunk_id),
+        }
+        for rowid, chunk_id, z in candidates
+    ]
+    return {
+        "exemplars": exemplars,
+        "k": k,
+        "era": era,
+        "pattern_id": projection.pattern_id,
     }
