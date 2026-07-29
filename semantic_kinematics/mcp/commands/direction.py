@@ -23,9 +23,14 @@ default (CODE_CONSTITUTION "never trust-and-degrade on an unknown identity" /
 GROUND_PHYSICS falsification-shaped confidence: an unvalidated axis is not a
 safe default to project against).
 
-Later phases (D4/D6: ``cross_project``, ``direction_diagnostics``,
-``preview_pattern``) register their MCP tools in this module and in
-``server.py``; none of that surface exists yet.
+Phase 4 (this module addition) lands ``cross_project`` (D4: the
+era-direction x era-corpus rate matrix -- the Aim-3 composition-shift
+hypothesis test), ``direction_diagnostics`` (D4: a direction artifact's D3
+diagnostics read back without recomputation), and ``preview_pattern`` (D6: a
+read-only regex-iteration primitive over tvi's ``corpus.db``). ``cross_project``
+reuses ``build_rate_table``/``query_rates``'s era-grouping verbatim (ONE-DOOR:
+composition only, no new math) over projection artifacts the caller has
+already built with ``project_corpus`` for each per-era direction.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -239,6 +245,11 @@ MIN_PAIRS_FOR_HELD_OUT_SPLIT = 4
 # at the query_rates call site.
 DEFAULT_RATE_TARGET_PRECISION = 0.9
 DEFAULT_TOP_EXEMPLARS_K = 20
+# Phase 4 (D6) default: preview_pattern's example-chunk cap. Named per the
+# same "no bare literal at the call site" discipline as the Phase 3 defaults
+# above; the ADR does not pin a number, this is a reasonable interactive-scale
+# default an operator can override per call.
+DEFAULT_PREVIEW_PATTERN_K = 20
 EXPECTED_PROJECTION_REGIME = "direction-projection"
 REQUIRED_PROJECTION_HEADER_KEYS = (
     "regime",
@@ -1006,7 +1017,8 @@ def refuse_unless_usable(direction: "Direction", allow_override: bool) -> None:
 def get_tools() -> List[Tool]:
     """Return direction-probe tool definitions (Phase 2 ``initialize_direction``;
     Phase 3 ``project_text``/``project_chunks``/``project_corpus``/
-    ``query_rates``/``top_exemplars``; Phase 4 verbs land in their own PR)."""
+    ``query_rates``/``top_exemplars``; Phase 4 ``cross_project``/
+    ``direction_diagnostics``/``preview_pattern``)."""
     return [
         Tool(
             name="initialize_direction",
@@ -1246,6 +1258,110 @@ def get_tools() -> List[Tool]:
                     },
                 },
                 "required": ["projection_ref", "corpus_db_ref"],
+            },
+        ),
+        Tool(
+            name="cross_project",
+            description=(
+                "The era-composition matrix (ADR-SKM-008 D4): given a list of "
+                "per-era direction artifacts (each extracted from one era's "
+                "seeds) and their corresponding pre-built full-corpus "
+                "projection artifacts, build the era-direction x era-corpus "
+                "rate matrix -- row = the direction's own era, column = every "
+                "era present in the corpus rows the projection covers, cell = "
+                "the rate (fraction above threshold) plus both source "
+                "identities (direction era/pattern_id/verdict, corpus era) and "
+                "the allow_non_usable_direction override trace. This is "
+                "composition only: no new math, reuses build_rate_table's "
+                "era-grouping (query_rates' machinery) over already-built "
+                "projections."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "direction_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Paths to per-era <pattern_id>.<era>.direction.json artifacts (one matrix row each).",
+                    },
+                    "projection_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Paths to the corresponding <pattern_id>.<era>.proj.json "
+                            "artifacts (one per direction_refs entry, same order; "
+                            "each must have been built via project_corpus so it "
+                            "covers the full corpus, i.e. every era column)."
+                        ),
+                    },
+                    "corpus_db_ref": {
+                        "type": "string",
+                        "description": "Path to corpus.db (opened read-only) for era grouping.",
+                    },
+                    "target_precision": {
+                        "type": "number",
+                        "default": DEFAULT_RATE_TARGET_PRECISION,
+                    },
+                    ALLOW_NON_USABLE_PROJECTION_ARG: {
+                        "type": "boolean",
+                        "description": "Override the usable-verdict refusal per direction (default: false).",
+                        "default": False,
+                    },
+                },
+                "required": ["direction_refs", "projection_refs", "corpus_db_ref"],
+            },
+        ),
+        Tool(
+            name="direction_diagnostics",
+            description=(
+                "Read back a direction artifact's D3 diagnostics (held-out "
+                "AUC, topic-control, bootstrap, null reference, verdict) "
+                "WITHOUT recomputation -- the 'should I trust this axis' "
+                "inspect verb. One-call-consume: loads the persisted manifest "
+                "and returns its recorded diagnostics fields verbatim."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "direction_ref": {
+                        "type": "string",
+                        "description": "Path to a <pattern_id>[.<era>].direction.json artifact.",
+                    },
+                },
+                "required": ["direction_ref"],
+            },
+        ),
+        Tool(
+            name="preview_pattern",
+            description=(
+                "Read-only regex iteration over tvi's corpus.db (D6): opens "
+                "corpus.db via a mode=ro URI, compiles the regex with "
+                "re.IGNORECASE (tvi PR #61 methodology default -- case-only "
+                "variance is not a construction distinction), applies optional "
+                "scope filters (era/channel/speaker), and returns the match "
+                "count plus up to k example chunks. Writes NOTHING -- lets the "
+                "operator iterate a regex before asking tvi to mint a full "
+                "seedset (ADR-TVI-008 Component 4 / Option A: seed-set minting "
+                "stays corpus-side; this primitive only reads)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "regex": {"type": "string", "description": "Python regex to match against chunk.text."},
+                    "corpus_db_ref": {
+                        "type": "string",
+                        "description": "Path to corpus.db (opened read-only).",
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "Maximum number of example chunks to return.",
+                        "default": DEFAULT_PREVIEW_PATTERN_K,
+                    },
+                    "era": {"type": "string", "description": "Optional era scope filter."},
+                    "channel": {"type": "string", "description": "Optional channel (chunk.source) scope filter."},
+                    "speaker": {"type": "string", "description": "Optional speaker scope filter."},
+                },
+                "required": ["regex", "corpus_db_ref"],
             },
         ),
     ]
@@ -2196,4 +2312,278 @@ async def top_exemplars(manager: StateManager, args: Dict[str, Any]) -> Dict[str
         "k": k,
         "era": era,
         "pattern_id": projection.pattern_id,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 (ADR-SKM-008 D4/D6): cross_project, direction_diagnostics,
+# preview_pattern.
+# --------------------------------------------------------------------------- #
+
+def build_cross_projection_row(
+    direction: "Direction",
+    projection: "Projection",
+    corpus_rows: Sequence[Dict[str, Any]],
+    threshold_info: Dict[str, Any],
+    allow_override_used: bool,
+) -> Dict[str, Any]:
+    """Pure composition core for one matrix row (ADR-SKM-008 D4 ``cross_project``):
+    given a direction (extracted from era A's seeds), its full-corpus
+    projection artifact, and the corpus rows (already joined by the IO layer)
+    the projection covers, group by ``era`` alone via
+    :func:`build_rate_table` -- exactly ``query_rates``'s aggregation, no new
+    math -- then unpack each era-column group into one matrix cell. Every
+    cell records BOTH source identities (the row's direction era/pattern_id/
+    verdict, and the cell's own corpus era) plus the override trace, per the
+    acceptance criterion "each cell records both source directions."
+
+    Returns ``{"direction_era": era, "pattern_id": ..., "direction_verdict":
+    ..., "cells": [{"corpus_era": ..., "n": ..., "n_above": ..., "rate": ...,
+    "direction_era": ..., "direction_pattern_id": ...,
+    "direction_verdict": ..., "allow_non_usable_direction_used": bool}]}``.
+    """
+    rate_table = build_rate_table(
+        projection, threshold_info["threshold"], corpus_rows, group_by=["era"]
+    )
+    cells = []
+    for group in rate_table["groups"]:
+        cells.append(
+            {
+                "corpus_era": group["key"]["era"],
+                "n": group["n"],
+                "n_above": group["n_above"],
+                "rate": group["rate"],
+                "direction_era": direction.era,
+                "direction_pattern_id": direction.pattern_id,
+                "direction_verdict": direction.verdict,
+                "allow_non_usable_direction_used": allow_override_used,
+            }
+        )
+    return {
+        "direction_era": direction.era,
+        "pattern_id": direction.pattern_id,
+        "direction_verdict": direction.verdict,
+        "direction_ref_sha256": direction.direction_sha256,
+        "threshold": threshold_info,
+        "cells": cells,
+        "n_total": rate_table["n_total"],
+    }
+
+
+async def cross_project(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``cross_project`` (D4): the era-direction x era-corpus rate
+    matrix. Consumes ``direction_refs`` (one per-era direction artifact per
+    row) paired 1:1 with ``projection_refs`` (each direction's own full-corpus
+    projection, already built via ``project_corpus`` -- this verb does not
+    project anything itself, it composes rate tables that already exist,
+    exactly the "composition only, no new math" scope). Each row is
+    era-grouped via the shared :func:`build_rate_table` core (query_rates'
+    machinery), producing the off-diagonal (era-A direction on era-B corpus
+    rows) alongside the diagonal in the same pass -- the matrix is simply
+    every column ``build_rate_table`` returns, not a special off-diagonal
+    computation.
+
+    Fail-fast, not partial: the first ``direction_refs``/``projection_refs``
+    pair that fails to load or gate (identity mismatch, non-usable verdict)
+    aborts the whole call and returns that pair's error -- rows already
+    computed for earlier pairs are discarded, mirroring every other verb in
+    this module's all-or-nothing error shape rather than returning a partial
+    matrix with per-row error entries. code-review note: named explicitly
+    here since this is the first batch/list-input verb in the module and the
+    asymmetry (list input, all-or-nothing failure) is worth a deliberate
+    choice, not an accident of the loop.
+    """
+    direction_refs = args.get("direction_refs")
+    projection_refs = args.get("projection_refs")
+    corpus_db_ref = args.get("corpus_db_ref")
+    target_precision = args.get("target_precision", DEFAULT_RATE_TARGET_PRECISION)
+    allow_override = bool(args.get(ALLOW_NON_USABLE_PROJECTION_ARG, False))
+
+    if not direction_refs:
+        return {"error": "direction_refs is required (non-empty list of direction artifact paths)."}
+    if not projection_refs:
+        return {"error": "projection_refs is required (non-empty list of projection artifact paths)."}
+    if len(direction_refs) != len(projection_refs):
+        return {
+            "error": (
+                f"direction_refs (len {len(direction_refs)}) and projection_refs "
+                f"(len {len(projection_refs)}) must be the same length and order "
+                "(one projection per direction, 1:1)."
+            )
+        }
+    if not corpus_db_ref:
+        return {"error": "corpus_db_ref is required."}
+
+    try:
+        conn = open_corpus_db_readonly(corpus_db_ref)
+    except DirectionRefusal as exc:
+        return {"error": str(exc)}
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        for direction_ref, projection_ref in zip(direction_refs, projection_refs):
+            try:
+                direction = load_direction(direction_ref)
+                projection = load_projection(projection_ref)
+                refuse_unless_projection_matches_direction(projection, direction)
+                refuse_unless_usable(direction, allow_override)
+                threshold_info = calibrate_threshold_from_direction(direction, target_precision)
+            except (FileNotFoundError, ValueError, DirectionRefusal) as exc:
+                return {
+                    "error": str(exc),
+                    "direction_ref": direction_ref,
+                    "projection_ref": projection_ref,
+                }
+
+            corpus_rows = fetch_chunk_rows_for_rowids(conn, projection.rowid_mm.tolist())
+            row = build_cross_projection_row(
+                direction,
+                projection,
+                corpus_rows,
+                threshold_info,
+                allow_override_used=bool(allow_override and direction.verdict != "usable"),
+            )
+            rows.append(row)
+    finally:
+        conn.close()
+
+    return {"rows": rows, "n_directions": len(rows)}
+
+
+async def direction_diagnostics(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``direction_diagnostics`` (D4): read back a direction
+    artifact's D3 diagnostics + verdict WITHOUT recomputation. One-call-
+    consume -- this loads the persisted manifest (:func:`load_direction`) and
+    returns its recorded fields verbatim; it never re-runs
+    ``initialize_direction_core``'s held-out AUC / bootstrap / topic-control
+    computations.
+    """
+    direction_ref = args.get("direction_ref")
+    if not direction_ref:
+        return {"error": "direction_ref is required."}
+
+    try:
+        direction = load_direction(direction_ref)
+    except (FileNotFoundError, ValueError) as exc:
+        return {"error": str(exc)}
+
+    manifest = direction.manifest
+    return {
+        "direction_ref": direction_ref,
+        "pattern_id": direction.pattern_id,
+        "era": direction.era,
+        "verdict": direction.verdict,
+        "pole_separation": manifest.get("pole_separation"),
+        "held_out_auc": manifest.get("held_out_auc"),
+        "topic_control": manifest.get("topic_control"),
+        "bootstrap": manifest.get("bootstrap"),
+        "null_reference": manifest.get("null_reference"),
+        "n_seeds": manifest.get("n_seeds"),
+        "n_negatives": manifest.get("n_negatives"),
+        "axis_source": direction.axis_source,
+        "embedding_model_id": direction.embedding_model_id,
+        "source_memmap_sha256": direction.source_memmap_sha256,
+        "built_at": manifest.get("built_at"),
+    }
+
+
+def find_preview_matches(
+    conn: sqlite3.Connection,
+    pattern: "re.Pattern",
+    k: int,
+    era: Optional[str] = None,
+    channel: Optional[str] = None,
+    speaker: Optional[str] = None,
+) -> Dict[str, Any]:
+    """D6 read-only regex-iteration core: SELECT chunk_id/text (+ optional
+    scope filters) from ``chunk`` and apply ``pattern`` in Python (SQLite has
+    no native regex operator without a loadable extension; filtering
+    in-Python after a scoped SELECT keeps this a read-only, dependency-free
+    query). Returns ``{"match_count": int, "examples": [{"chunk_id", "text"}]}``
+    -- ``match_count`` is the TOTAL number of matches found (not capped at
+    k); ``examples`` is capped at ``k``. No artifact, no negatives, no
+    pairing -- this never mints a seedset (ADR-TVI-008 Component 4 / Option A
+    stays corpus-side).
+    """
+    query = "SELECT chunk_id, text, era, source AS channel, speaker FROM chunk WHERE 1=1"
+    params: List[Any] = []
+    if era is not None:
+        query += " AND era = ?"
+        params.append(era)
+    if channel is not None:
+        query += " AND source = ?"
+        params.append(channel)
+    if speaker is not None:
+        query += " AND speaker = ?"
+        params.append(speaker)
+
+    cur = conn.execute(query, params)
+    match_count = 0
+    examples: List[Dict[str, str]] = []
+    for chunk_id, text, row_era, row_channel, row_speaker in cur.fetchall():
+        if text is None or not pattern.search(text):
+            continue
+        match_count += 1
+        if len(examples) < k:
+            examples.append({"chunk_id": chunk_id, "text": text})
+    return {"match_count": match_count, "examples": examples}
+
+
+async def preview_pattern(manager: StateManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for ``preview_pattern`` (D6): read-only regex iteration over
+    corpus.db. Compiles with ``re.IGNORECASE`` -- the same default tvi's
+    ``scripts/build_seed_sets.py`` methodology decision uses (tvi PR #61:
+    "Methodology decision (case-insensitive is the default) ... Compiling
+    with re.IGNORECASE removes the case-of-first-word accident ... as a
+    matching variable"), so a regex previewed here matches identically to how
+    tvi's labeler will later apply it. Opens corpus.db via a mode=ro URI
+    (:func:`open_corpus_db_readonly`) and writes NOTHING -- no artifact, no
+    seedset, no mutation of corpus.db.
+    """
+    regex = args.get("regex")
+    corpus_db_ref = args.get("corpus_db_ref")
+    k_arg = args.get("k", DEFAULT_PREVIEW_PATTERN_K)
+    era = args.get("era")
+    channel = args.get("channel")
+    speaker = args.get("speaker")
+
+    if not regex:
+        return {"error": "regex is required."}
+    if not corpus_db_ref:
+        return {"error": "corpus_db_ref is required."}
+
+    # Malformed k must return the {"error": ...} shape every other bad-input
+    # path in this module uses, not an unhandled ValueError from int(...) --
+    # code-review finding (bare int() would crash on a non-numeric k instead
+    # of refusing gracefully).
+    try:
+        k = int(k_arg)
+    except (TypeError, ValueError):
+        return {"error": f"k must be an integer, got {k_arg!r}."}
+    if k < 0:
+        return {"error": f"k must be >= 0, got {k}."}
+
+    try:
+        pattern = re.compile(regex, re.IGNORECASE)
+    except re.error as exc:
+        return {"error": f"regex {regex!r} failed to compile: {exc}"}
+
+    try:
+        conn = open_corpus_db_readonly(corpus_db_ref)
+    except DirectionRefusal as exc:
+        return {"error": str(exc)}
+
+    try:
+        result = find_preview_matches(conn, pattern, k, era=era, channel=channel, speaker=speaker)
+    finally:
+        conn.close()
+
+    return {
+        "regex": regex,
+        "k": k,
+        "era": era,
+        "channel": channel,
+        "speaker": speaker,
+        "match_count": result["match_count"],
+        "examples": result["examples"],
     }
