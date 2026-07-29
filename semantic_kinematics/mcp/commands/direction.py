@@ -1623,6 +1623,47 @@ def rate_table_artifact_paths(out_dir: str, pattern_id: str, era: Optional[str])
     return os.path.join(out_dir, f"{safe_slug}.rates.json")
 
 
+def _standard_normal_quantile(p: float) -> float:
+    """Inverse standard-normal CDF (probit), Peter Acklam's rational
+    approximation -- dependency-free (no scipy in this project's dependency
+    set; Python's stdlib ``math`` module has no ``erfinv`` either). Accurate
+    to better than 1.15e-9 relative error over the full (0, 1) domain, which
+    is far tighter than this module's own threshold-calibration honesty
+    caveat warrants -- the approximation error here is not the limiting
+    factor.
+    """
+    if not 0.0 < p < 1.0:
+        raise ValueError(f"_standard_normal_quantile requires 0 < p < 1, got {p}")
+
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    e = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+
+    p_low = 0.02425
+    p_high = 1.0 - p_low
+
+    if p < p_low:
+        q = np.sqrt(-2.0 * np.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((e[0] * q + e[1]) * q + e[2]) * q + e[3]) * q + 1.0
+        )
+    if p <= p_high:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (
+            (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+        )
+    q = np.sqrt(-2.0 * np.log(1.0 - p))
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+        (((e[0] * q + e[1]) * q + e[2]) * q + e[3]) * q + 1.0
+    )
+
+
 def calibrate_threshold_from_direction(
     direction: "Direction", target_precision: float = DEFAULT_RATE_TARGET_PRECISION
 ) -> Dict[str, Any]:
@@ -1654,14 +1695,14 @@ def calibrate_threshold_from_direction(
             "calibrate a threshold without it. Re-run initialize_direction, "
             "or supply an explicit 'threshold' to query_rates."
         )
-    # Standard-normal quantile via the inverse error function (dependency-free
-    # -- no scipy in this project's dependency set, mirroring auc_score's
-    # scipy-free precedent). A higher target_precision or a higher achieved
-    # AUC both push the threshold higher (fewer, more-confident positives).
-    from math import erfinv
+    # Standard-normal quantile via a dependency-free inverse-normal-CDF
+    # approximation (no scipy in this project's dependency set, mirroring
+    # auc_score's scipy-free precedent -- Python's stdlib math module has no
+    # erfinv). A higher target_precision or a higher achieved AUC both push
+    # the threshold higher (fewer, more-confident positives).
     quantile = target_precision + (1.0 - target_precision) * max(0.0, min(1.0, auc))
     quantile = min(quantile, 0.999999)
-    z_threshold = float(np.sqrt(2.0) * erfinv(2.0 * quantile - 1.0))
+    z_threshold = _standard_normal_quantile(quantile)
     return {
         "threshold": round(z_threshold, 4),
         "target_precision": target_precision,
