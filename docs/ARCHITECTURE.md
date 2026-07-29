@@ -24,7 +24,7 @@ Four rules. All four apply simultaneously.
 
 **What lives here:** The analysis primitives — the contracted MCP tool implementations.
 
-- `semantic_kinematics/mcp/commands/` — five command modules: `embeddings.py`, `trajectory.py`, `classification.py`, `axis_alignment.py`, `model.py`
+- `semantic_kinematics/mcp/commands/` — six command modules: `embeddings.py`, `trajectory.py`, `classification.py`, `axis_alignment.py`, `model.py`, `direction.py`
 
 **Rules:**
 - No session state retained between calls. An adapter is resolved, used, and released per call (target of ADR-003; not yet implemented).
@@ -48,7 +48,7 @@ This is a layer **beneath** both the control-plane core and the data-plane. It i
 
 **What lives here:** `semantic_kinematics/mcp/server.py`.
 
-The server dispatches JSON-RPC tool calls to the command modules. This is the sole authorized point of entry into the control-plane core. The contracted tool surface is currently nine tools: `embed_text`, `calculate_drift`, `classify_document`, `analyze_trajectory`, `compare_trajectories`, `analyze_axis_alignment`, `model_status`, `model_load`, `model_unload`.
+The server dispatches JSON-RPC tool calls to the command modules. This is the sole authorized point of entry into the control-plane core. The contracted tool surface is currently ten tools: `embed_text`, `calculate_drift`, `classify_document`, `analyze_trajectory`, `compare_trajectories`, `analyze_axis_alignment`, `model_status`, `model_load`, `model_unload`, `initialize_direction`.
 
 **Rules:**
 - All control-plane consumer access to analysis primitives passes through this surface.
