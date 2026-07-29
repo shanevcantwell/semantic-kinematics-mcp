@@ -648,16 +648,20 @@ def verdict_from_diagnostics(
     result is an alarm, not a win. Returns one of {"usable",
     "under-determined", "leakage-suspected"}.
 
-    Precedence: an axis-underdetermined or bootstrap-failure result is
-    "under-determined" outright (nothing to trust); leakage is checked next
-    (a >0.98 held-out AUC discredits the result regardless of stability);
-    otherwise an under-determined bootstrap cosine still blocks promotion.
+    Precedence: an axis-underdetermined, bootstrap-failure, or held-out-split
+    failure result is "under-determined" outright (nothing to trust) -- an
+    unmeasured leakage diagnostic (too few paired groups to split) must not
+    read as a clean pass; leakage is checked next (a >0.98 held-out AUC
+    discredits the result regardless of stability); otherwise an
+    under-determined bootstrap cosine still blocks promotion.
     """
     if "error" in direction_result:
         return "under-determined"
     if "error" in bootstrap:
         return "under-determined"
-    if "error" not in held_out and held_out.get("leakage_suspected"):
+    if "error" in held_out:
+        return "under-determined"
+    if held_out.get("leakage_suspected"):
         return "leakage-suspected"
     if bootstrap.get("under_determined"):
         return "under-determined"
@@ -727,9 +731,13 @@ def initialize_direction_core(
     )
 
     centered_random = mean_center(random_topic_vecs, calibration.mu)
-    # Topic-control uses the same held-out split's negatives/seeds when
-    # available; falls back to the full sets when the split itself failed
-    # (too few pairs) so topic-control can still run independently of AUC.
+    # Topic-control runs IN-SAMPLE against the full-data axis: it passes the
+    # full centered negatives/seeds and the axis fit on all of them (not the
+    # held-out split's subsets). The random-vs-negative orthogonality
+    # comparison is same-axis relative, so it is directionally sound. The
+    # seed-vs-negative AUC reported here, however, is in-sample and optimistic
+    # by construction -- it measures separation on the same vectors the axis
+    # was fit from; the held-out AUC above is the leakage-honest figure.
     topic_control = topic_control_check(
         unit_axis,
         held_out_negatives=centered_negatives,

@@ -626,6 +626,18 @@ def test_verdict_under_determined_when_direction_extraction_failed():
     assert verdict_from_diagnostics(direction_result, {}, {}) == "under-determined"
 
 
+def test_verdict_under_determined_when_held_out_split_failed_despite_clean_bootstrap():
+    """A held-out split that could not be measured (too few paired groups)
+    must not read as a clean pass. Even paired with a high-stability bootstrap
+    and a successfully extracted axis, an unmeasured leakage diagnostic yields
+    "under-determined" -- the error guard on held_out takes precedence over
+    both the leakage check and the usable fall-through."""
+    direction_result = {"unit_axis": np.zeros(4), "pole_separation": 1.0}
+    held_out = {"error": "too few paired groups to split"}
+    bootstrap = {"mean_pairwise_cosine": 0.95, "under_determined": False}
+    assert verdict_from_diagnostics(direction_result, held_out, bootstrap) == "under-determined"
+
+
 # --------------------------------------------------------------------------- #
 # initialize_direction_core: orchestration + era-scoped filtering.
 # --------------------------------------------------------------------------- #
