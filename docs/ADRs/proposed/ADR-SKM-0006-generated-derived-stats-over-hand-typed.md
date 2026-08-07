@@ -1,8 +1,8 @@
-# ADR-SKMCP-0006: Derived stats are generated, never hand-typed — enforcement surface over prose
+# ADR-SKM-0006: Derived stats are generated, never hand-typed — enforcement surface over prose
 
 **Status:** accepted
 **Date:** 2026-07-09 (US/Mountain)
-**Related:** ADR-SKMCP-0005 (shares the enforcement-surface principle — a generated null/report over an asserted one); ADR-CON-0005 (confirm-complete bell — the (f) enforcement-surface open question below)
+**Related:** ADR-SKM-0005 (shares the enforcement-surface principle — a generated null/report over an asserted one); ADR-CON-0005 (confirm-complete bell — the (f) enforcement-surface open question below)
 
 ---
 

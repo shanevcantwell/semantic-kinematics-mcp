@@ -1,4 +1,4 @@
-"""Context-conditioned embedding atom (ADR-SKMCP-0003).
+"""Context-conditioned embedding atom (ADR-SKM-0003).
 
 Embed a target phrase *inside* a ``[leading context + target]`` window so the
 embedder's attention encodes the setup into the target's representation, then
@@ -7,7 +7,7 @@ pool **only the target span** (consistent across the context-ramp index ``k``).
 Why this construction and not context-free embedding: the comedic jolt is a
 *conditional* object — the punchline carries it only read after its setup. A
 context-free atom (token/phrase/sentence) amputates that contrast; conditioning
-restores it. See ``docs/ADRs/proposed/ADR-SKMCP-0003-context-conditioned-embedding-atom.md``.
+restores it. See ``docs/ADRs/proposed/ADR-SKM-0003-context-conditioned-embedding-atom.md``.
 
 Span-localization is by **character-offset mapping**, not by tokenizing the
 target in isolation: isolated-T diverges from in-context-T by a token at set

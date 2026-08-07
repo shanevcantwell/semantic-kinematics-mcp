@@ -2,7 +2,7 @@
 
 This document specifies exactly what each function in
 `semantic_kinematics/mcp/commands/axis_alignment.py` computes. It is the
-mechanical companion to [ADR-001](ADRs/proposed/ADR-001-referential-axis-alignment.md),
+mechanical companion to [ADR-SKM-0007](ADRs/proposed/ADR-SKM-0007-referential-axis-alignment.md),
 which records *why* the design is shaped this way.
 
 ## Notation

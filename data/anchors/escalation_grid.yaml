@@ -13,12 +13,12 @@
 #   criterion (not yet built) say otherwise. Treat the grid as a question, not a ruler.
 #
 # Purpose: input for Spike A (escalation-axis union SVD) and Spike B (projection).
-# The escalation hypothesis (ADR-SKMCP-0001) holds escalation as THREE candidate
+# The escalation hypothesis (ADR-SKM-0001) holds escalation as THREE candidate
 # axes — tone, urgency, importance — as an anchor TO DISPROVE. Spike A's SVD on
 # the stacked (escalated - level) delta vectors tells us whether these are one
 # collapsed manifold or genuinely separable directions.
 #
-# HOW THE AXIS IS DEFINED (ADR-SKMCP-0001):
+# HOW THE AXIS IS DEFINED (ADR-SKM-0001):
 #   axis direction = mean of (embed(escalated) - embed(level)) over a pair set,
 #   single embedder, displacement = escalated - level.
 #

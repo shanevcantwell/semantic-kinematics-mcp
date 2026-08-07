@@ -1,4 +1,4 @@
-# ADR-SKMCP-0001: Directional Projection Primitive for sk-mcp
+# ADR-SKM-0001: Directional Projection Primitive for sk-mcp
 
 **Status:** proposed
 **Date:** 2026-06-02 (US/Mountain)
@@ -11,13 +11,19 @@
 > **Promotion note (2026-06-13):** Promoted from `design-docs/incoming-ideas/`
 > into this repo; sk-mcp is the canon home for sk-mcp ADRs, and the source copy in
 > `incoming-ideas/` is removed so no duplicate diverges. The `SKMCP-NNNN` identity
-> is retained deliberately — cross-repo references (semantic-forge, design-docs)
-> depend on it — rather than renumbering to a local `ADR-004`; the
-> `ADR-00N` vs `ADR-SKMCP-NNNN` scheme reconciliation remains the open ADR-numbering
-> thread carried from ADR-002/003. **Relationship to ADR-001:** ADR-001 (referential
+> was retained deliberately at promotion time — cross-repo references (semantic-forge, design-docs)
+> depended on it — rather than renumbering to a local `ADR-004`; the
+> `ADR-00N` vs `ADR-SKMCP-NNNN` scheme reconciliation was the open ADR-numbering
+> thread carried from the old ADR-002/ADR-003 (now ADR-SKM-0008/ADR-SKM-0009). **Relationship to ADR-SKM-0007:** ADR-SKM-0007 (referential
 > axis-alignment) is the *position-regime* sibling — sentence atom, corpus null;
 > this ADR is the *bearing-regime* primitive — displacement atom, measured-displacement
 > null. Additive, not superseding. See `docs/HANDOFF.md` §8 for the regime split.
+>
+> **Reconciliation note (2026-07-18):** The `ADR-00N` vs `ADR-SKMCP-NNNN` split noted
+> above has been resolved — both series are unified under the registered code `SKM`
+> (4-digit padding). This ADR's identity is now `ADR-SKM-0001`; the old bare trio
+> (`ADR-001`/`002`/`003`) is now `ADR-SKM-0007`/`0008`/`0009`. See the migration PR
+> for the full old→new table.
 
 ---
 
