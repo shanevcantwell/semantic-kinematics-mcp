@@ -12,6 +12,17 @@ transformers ~4.42. Two compatibility issues with transformers >=4.45:
 
 We fix both by patching the BidirectionalMistralModel.forward after loading,
 rather than pinning transformers to an old version.
+
+A third compatibility issue with transformers >=5.0 (issue #55): NVEmbedModel's
+custom __init__ calls super().__init__(config) but never self.post_init(), so
+it never gets the all_tied_weights_keys attribute that
+PreTrainedModel.post_init() sets. transformers>=5.0's from_pretrained() reads
+that attribute directly (no default) while finalizing weight loading, so the
+load fails with an AttributeError before AutoModel.from_pretrained() ever
+returns -- too early for a post-hoc patch on the returned model instance. We
+fix this by ensuring the base PreTrainedModel class carries a safe default
+before calling from_pretrained(), so every subclass (including the
+dynamically-loaded NVEmbedModel) inherits it via normal attribute lookup.
 """
 
 import os
@@ -21,6 +32,31 @@ import numpy as np
 import torch
 
 from semantic_kinematics.embeddings.base import EmbeddingAdapter
+
+
+def _ensure_all_tied_weights_keys_default():
+    """Ensure PreTrainedModel carries a safe all_tied_weights_keys default.
+
+    transformers>=5.0's PreTrainedModel.post_init() sets self.all_tied_weights_keys
+    on the instance, and from_pretrained()'s weight-loading finalization reads it
+    back with plain attribute access (no getattr default) partway through the
+    same call. NV-Embed-v2's custom NVEmbedModel.__init__ never calls
+    self.post_init(), so the instance never gets the attribute and
+    from_pretrained() raises AttributeError before it can return a model to
+    patch (see issue #55).
+
+    Setting the attribute on the PreTrainedModel base class (only if the
+    installed transformers version doesn't already define one) gives every
+    subclass -- including custom trust_remote_code classes -- a safe empty-dict
+    fallback via ordinary class attribute lookup, without touching upstream
+    model code or any private/internal transformers API. A no-op on
+    transformers versions that already define it (e.g. <5.0, or a future
+    release that fixes this).
+    """
+    from transformers.modeling_utils import PreTrainedModel
+
+    if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
+        PreTrainedModel.all_tied_weights_keys = {}
 
 
 def _patch_bidirectional_mistral(embedding_model):
@@ -181,6 +217,8 @@ class NVEmbedAdapter(EmbeddingAdapter):
         """Load model and tokenizer to GPU."""
         if self._model is None:
             from transformers import AutoModel, AutoTokenizer
+
+            _ensure_all_tied_weights_keys_default()
 
             dtype = torch.float16 if self._use_fp16 else torch.float32
 
