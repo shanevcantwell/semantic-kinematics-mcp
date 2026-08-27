@@ -4,10 +4,13 @@ State manager for MCP server.
 Handles embedding cache and session state across tool calls.
 Uses adapter pattern to support multiple embedding backends.
 
-Environment variables:
-    EMBEDDING_BACKEND: "lmstudio" (default), "nv_embed", "sentence_transformers"
-    EMBEDDING_SERVER_URL: API URL for lmstudio backend (default: http://localhost:1234/v1)
-    EMBEDDING_MODEL: Model name for API backends
+Environment variables (no baked default -- Rule #14: a silently-wrong-model
+run is an unacceptable failure class):
+    EMBEDDING_BACKEND: "lmstudio", "nv_embed", or "sentence_transformers".
+        Required (via env or set_backend()) before get_adapter()/get_embed_fn()
+        is called; unresolved selection raises ValueError naming what is missing.
+    EMBEDDING_SERVER_URL: API URL for the lmstudio backend.
+    EMBEDDING_MODEL: Model name for API backends.
 """
 
 import hashlib
@@ -18,11 +21,6 @@ from dataclasses import dataclass, field
 
 if TYPE_CHECKING:
     from semantic_kinematics.embeddings.base import EmbeddingAdapter
-
-
-def _default_backend() -> str:
-    """Get default backend from environment, fallback to lmstudio (API-first, no torch)."""
-    return os.environ.get("EMBEDDING_BACKEND", "lmstudio")
 
 
 def _default_backend_kwargs() -> Dict:
@@ -44,13 +42,15 @@ class StateManager:
     - Embedding cache to avoid re-computing embeddings
     - Embedding adapter initialization (supports multiple backends)
 
-    Default backend: lmstudio (API-based, no torch required)
-    Set EMBEDDING_BACKEND=nv_embed for local GPU inference.
+    Backend is resolved from EMBEDDING_BACKEND (env) or set_backend() (explicit
+    args); no baked default. Backend resolution is lazy -- constructing a
+    StateManager never raises -- but get_adapter()/get_embed_fn() raise a clear
+    ValueError if no backend was ever resolved before the adapter is needed.
     """
 
     _embedding_cache: Dict[str, np.ndarray] = field(default_factory=dict)
     _adapter: Optional["EmbeddingAdapter"] = None
-    _backend: str = field(default_factory=_default_backend)
+    _backend: Optional[str] = field(default_factory=lambda: os.environ.get("EMBEDDING_BACKEND"))
     _backend_kwargs: Dict = field(default_factory=_default_backend_kwargs)
 
     def _cache_key(self, text: str) -> str:
@@ -79,8 +79,20 @@ class StateManager:
 
         Returns:
             Configured EmbeddingAdapter instance
+
+        Raises:
+            ValueError: If no backend was resolved from an explicit
+                set_backend() call or the EMBEDDING_BACKEND environment
+                variable. Rule #14: an unresolved backend must hard-fail
+                rather than silently pick one.
         """
         if self._adapter is None:
+            if not self._backend:
+                raise ValueError(
+                    "No embedding backend resolved: set EMBEDDING_BACKEND "
+                    "(e.g. 'lmstudio', 'nv_embed', 'sentence_transformers') "
+                    "or call StateManager.set_backend(...) explicitly."
+                )
             from semantic_kinematics.embeddings import get_adapter
             self._adapter = get_adapter(self._backend, **self._backend_kwargs)
         return self._adapter
