@@ -9,6 +9,14 @@ tokenizer and that it loads the tokenizer without the full model.
 
 from __future__ import annotations
 
+import pytest
+
+# nv_embed_adapter imports torch at module scope (needed at runtime for the
+# GPU backend); torch is an optional `gpu` extra (pyproject.toml), not part
+# of the base dev install, so collecting this module without it must skip
+# with a clear reason rather than fail the whole suite (issue #62).
+torch = pytest.importorskip("torch", reason="torch not installed (optional `gpu` extra)")
+
 from semantic_kinematics.embeddings.nv_embed_adapter import NVEmbedAdapter
 
 
