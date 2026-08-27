@@ -822,14 +822,22 @@ def test_calibrate_threshold_uses_exact_curve_when_raw_projections_present(tmp_p
     # Hand-built held-out projections (already in raw-projection units;
     # null_reference mu0=0/sigma0=1 below makes z == raw projection).
     # Seeds: 1, 2, 3, 4, 5.  Negatives: -2, -1, 0, 0.5, 3.5.
-    # At threshold z=2: seeds >= 2 -> {2,3,4,5} = 4; negatives >= 2 -> {3.5} = 1.
-    # precision = 4/5 = 0.8. At z=3: seeds -> {3,4,5}=3, negs -> {3.5}=1,
-    # precision = 3/4 = 0.75. At z=3.5: seeds -> {4,5}=2, negs -> {3.5}=1,
-    # precision = 2/3 = 0.667. So target_precision=0.8 is reached exactly at
-    # z=2 (the highest z with precision >= 0.8, scanning downward keeps the
-    # lowest qualifying z per the function's "keep scanning" contract --
-    # verify against a hand re-derivation instead of hardcoding the scan
-    # order assumption).
+    #
+    # _exact_precision_threshold now honors its declared contract: it returns
+    # the *highest* z at which precision first reaches target, scanning the
+    # distinct candidate z's high->low and returning on the first qualifier.
+    # The full precision curve over this fixture (candidates high->low) is
+    # non-monotone:
+    #     z=5.0  seeds>= {5}=1        negs>= {}=0      precision=1/1 = 1.000  (QUALIFIES)
+    #     z=4.0  seeds>= {4,5}=2      negs>= {}=0      precision=2/2 = 1.000
+    #     z=3.5  seeds>= {4,5}=2      negs>= {3.5}=1   precision=2/3 = 0.667
+    #     z=3.0  seeds>= {3,4,5}=3    negs>= {3.5}=1   precision=3/4 = 0.750
+    #     z=2.0  seeds>= {2,3,4,5}=4  negs>= {3.5}=1   precision=4/5 = 0.800  (re-qualifies)
+    #     z=1.0  seeds>= all=5        negs>= {3.5}=1   precision=5/6 = 0.833
+    # The highest qualifying z is therefore z=5.0 -- the scan returns on that
+    # first hit and never reaches the z=2 re-qualification. (Pre-fix, the code
+    # kept scanning to the *lowest* qualifier and returned z=1.0; that bug is
+    # what this assertion pins.)
     seed_proj = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
     neg_proj = np.array([-2.0, -1.0, 0.0, 0.5, 3.5])
 
@@ -844,13 +852,8 @@ def test_calibrate_threshold_uses_exact_curve_when_raw_projections_present(tmp_p
     result = calibrate_threshold_from_direction(direction, target_precision=0.8)
     assert "exact empirical precision-recall curve" in result["method"]
 
-    # Verify the returned threshold actually achieves >= target precision
-    # against the same held-out arrays (contract check, not a hardcoded value).
-    thr = result["threshold"]
-    n_seed_above = int(np.sum(seed_proj >= thr))
-    n_neg_above = int(np.sum(neg_proj >= thr))
-    precision = n_seed_above / (n_seed_above + n_neg_above)
-    assert precision >= 0.8
+    # Highest-qualifying-z contract: exactly z=5.0 under the fixed semantics.
+    assert result["threshold"] == 5.0
 
 
 def test_calibrate_threshold_falls_back_to_gaussian_when_no_raw_projections(tmp_path, scene):

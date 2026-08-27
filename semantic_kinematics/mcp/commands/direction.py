@@ -905,14 +905,16 @@ def write_direction_artifact(
 class Direction:
     """A loaded ``functional-direction`` artifact.
 
-    ``direction_sha256`` is the content-addressed sha256 of the ``unit_axis``
-    npz file bytes, computed at load time (the artifact itself does not
+    ``direction_sha256`` is the content-addressed sha256 of the *entire* npz
+    file bytes (not the ``unit_axis`` array alone -- the npz also carries the
+    persisted held-out projection arrays, so a held-out re-split invalidates
+    the sha as well), computed at load time (the artifact itself does not
     persist a self-sha -- Phase 2 had no consumer that needed one). Phase 3
     keys projection artifacts on ``(direction_sha256, source_memmap_sha256)``
     per the ADR D4 ``project_corpus`` row ("keyed by direction-sha +
     memmap-sha"), so a projection is invalidated *both* when the corpus is
     rebuilt (memmap sha changes, already gated) and when the direction itself
-    is re-extracted with different seeds/params (unit_axis bytes change).
+    is re-extracted with different seeds/params (npz bytes change).
     """
 
     embedding_model_id: str
@@ -1861,7 +1863,6 @@ def _exact_precision_threshold(
         return None
 
     candidates = np.unique(np.concatenate([seed_z, neg_z]))[::-1]  # highest first
-    best: Optional[float] = None
     for z in candidates:
         n_seed_above = int(np.sum(seed_z >= z))
         n_neg_above = int(np.sum(neg_z >= z))
@@ -1870,8 +1871,8 @@ def _exact_precision_threshold(
             continue
         precision = n_seed_above / n_above
         if precision >= target_precision:
-            best = float(z)  # keep scanning to the lowest z that still qualifies
-    return best
+            return float(z)
+    return None
 
 
 def calibrate_threshold_from_direction(
