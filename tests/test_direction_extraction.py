@@ -433,6 +433,10 @@ def test_held_out_auc_reasonable_on_moderate_separation(synthetic_scene):
     assert 0.0 <= result["auc"] <= 1.0
     assert result["n_held_seeds"] > 0
     assert result["leakage_suspected"] is False
+    # issue #66: the raw held-out projection arrays are returned alongside
+    # the summary AUC so callers can persist them for exact D5 calibration.
+    assert result["held_out_seed_proj"].shape == (result["n_held_seeds"],)
+    assert result["held_out_negative_proj"].shape == (result["n_held_negatives"],)
 
 
 def test_held_out_auc_trips_leakage_alarm_on_injected_perfect_separation():
@@ -764,6 +768,76 @@ def test_write_and_load_direction_artifact_round_trip(tmp_path, synthetic_scene)
     np.testing.assert_allclose(loaded.unit_axis, unit_axis)
 
 
+def test_write_and_load_direction_artifact_persists_held_out_projections(tmp_path, synthetic_scene):
+    """issue #66: the raw held-out seed/negative projection arrays persist in
+    the npz (never JSON) and round-trip through load_direction, so D5
+    threshold calibration can compute an exact precision-recall curve."""
+    unit_axis = np.ones(DIM) / np.sqrt(DIM)
+    seed_proj = np.array([0.5, 1.0, 1.5, 2.0])
+    neg_proj = np.array([-0.5, -0.2, 0.1, 0.3])
+    diagnostics = {
+        "pole_separation": 1.23,
+        "verdict": "usable",
+        "n_seeds": 41,
+        "n_negatives": 41,
+        "held_out_auc": {
+            "auc": 0.8,
+            "n_held_seeds": 4,
+            "n_held_negatives": 4,
+            "leakage_suspected": False,
+            "held_out_seed_proj": seed_proj,
+            "held_out_negative_proj": neg_proj,
+        },
+        "topic_control": {"seed_vs_negative_auc": 0.8},
+        "bootstrap": {"mean_pairwise_cosine": 0.9},
+        "null_reference": {"mu0": 0.0, "sigma0": 1.0, "n": 100},
+    }
+    npz_path, json_path = write_direction_artifact(
+        out_dir=str(tmp_path / "directions"),
+        pattern_id="comparative-perception",
+        era=None,
+        unit_axis=unit_axis,
+        calibration=synthetic_scene["calibration"],
+        seedset_manifest=synthetic_scene["seedset"]["manifest"],
+        diagnostics=diagnostics,
+    )
+
+    # The JSON manifest's held_out_auc block keeps only summary scalars --
+    # never the raw arrays (they belong in the npz, per this module's
+    # existing numeric-array convention).
+    with open(json_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    assert "held_out_seed_proj" not in manifest["held_out_auc"]
+    assert "held_out_negative_proj" not in manifest["held_out_auc"]
+    assert manifest["held_out_auc"]["auc"] == 0.8
+
+    loaded = load_direction(json_path)
+    np.testing.assert_allclose(loaded.held_out_seed_proj, seed_proj)
+    np.testing.assert_allclose(loaded.held_out_negative_proj, neg_proj)
+
+
+def test_load_direction_without_held_out_projections_leaves_them_none(tmp_path, synthetic_scene):
+    """Older/minimal artifacts (no raw arrays recorded) load cleanly with the
+    new fields defaulting to None -- backward compatible."""
+    unit_axis = np.ones(DIM) / np.sqrt(DIM)
+    diagnostics = {
+        "pole_separation": 1.0, "verdict": "usable", "n_seeds": 5, "n_negatives": 5,
+        "held_out_auc": {"auc": 0.8}, "topic_control": {}, "bootstrap": {}, "null_reference": {},
+    }
+    _npz_path, json_path = write_direction_artifact(
+        out_dir=str(tmp_path / "directions"),
+        pattern_id="comparative-perception",
+        era=None,
+        unit_axis=unit_axis,
+        calibration=synthetic_scene["calibration"],
+        seedset_manifest=synthetic_scene["seedset"]["manifest"],
+        diagnostics=diagnostics,
+    )
+    loaded = load_direction(json_path)
+    assert loaded.held_out_seed_proj is None
+    assert loaded.held_out_negative_proj is None
+
+
 def test_write_direction_artifact_era_scoped_filename(tmp_path, synthetic_scene):
     unit_axis = np.ones(DIM) / np.sqrt(DIM)
     diagnostics = {
@@ -995,7 +1069,16 @@ def test_initialize_direction_core_is_deterministic_same_in_same_out(synthetic_s
 
     np.testing.assert_allclose(result1["unit_axis"], result2["unit_axis"])
     assert result1["verdict"] == result2["verdict"]
-    assert result1["held_out_auc"] == result2["held_out_auc"]
+
+    held_out_1 = dict(result1["held_out_auc"])
+    held_out_2 = dict(result2["held_out_auc"])
+    seed_proj_1 = held_out_1.pop("held_out_seed_proj")
+    seed_proj_2 = held_out_2.pop("held_out_seed_proj")
+    neg_proj_1 = held_out_1.pop("held_out_negative_proj")
+    neg_proj_2 = held_out_2.pop("held_out_negative_proj")
+    assert held_out_1 == held_out_2
+    np.testing.assert_allclose(seed_proj_1, seed_proj_2)
+    np.testing.assert_allclose(neg_proj_1, neg_proj_2)
 
 
 # --------------------------------------------------------------------------- #

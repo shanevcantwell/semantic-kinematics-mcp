@@ -527,8 +527,14 @@ def held_out_separation_auc(
     negatives, report AUC as a separator.
 
     Returns {"auc": float, "n_held_seeds": int, "n_held_negatives": int,
-    "leakage_suspected": bool} or {"error": ...} if there are too few paired
-    groups to hold out meaningfully (MIN_PAIRS_FOR_HELD_OUT_SPLIT).
+    "leakage_suspected": bool, "held_out_seed_proj": np.ndarray,
+    "held_out_negative_proj": np.ndarray} or {"error": ...} if there are too
+    few paired groups to hold out meaningfully (MIN_PAIRS_FOR_HELD_OUT_SPLIT).
+    The two projection arrays are the raw scalar projections (onto the
+    train-split axis) of the held-out seeds/negatives -- persisted by
+    ``write_direction_artifact`` so D5 threshold calibration can compute an
+    exact precision-recall curve instead of a gaussian-quantile
+    approximation (issue #66).
     """
     rng = rng or np.random.default_rng(0)
     chunk_to_seed_idx = {cid: i for i, cid in enumerate(seed_chunk_ids)}
@@ -571,6 +577,8 @@ def held_out_separation_auc(
         "n_held_seeds": len(held_s),
         "n_held_negatives": len(held_n),
         "leakage_suspected": bool(auc > DEFAULT_LEAKAGE_AUC_THRESHOLD),
+        "held_out_seed_proj": np.asarray(held_seed_proj, dtype=np.float64),
+        "held_out_negative_proj": np.asarray(held_neg_proj, dtype=np.float64),
     }
 
 
@@ -840,9 +848,26 @@ def write_direction_artifact(
     the unit axis (npz) + a manifest (json) carrying the full provenance chain
     -- seedset manifest, calibration manifest identity, era-scope, counts,
     pole_separation, and the D3 diagnostics.
+
+    When ``diagnostics["held_out_auc"]`` carries the raw
+    ``held_out_seed_proj`` / ``held_out_negative_proj`` arrays (issue #66),
+    they are persisted alongside ``unit_axis`` in the npz -- never JSON, per
+    this module's existing numeric-array convention (``write_projection_artifact``)
+    -- so :func:`calibrate_threshold_from_direction` can later compute an
+    exact D5 precision-recall threshold instead of a gaussian approximation.
+    The JSON manifest's ``held_out_auc`` block keeps only the summary scalars.
     """
     npz_path, json_path = direction_artifact_paths(out_dir, pattern_id, era)
-    np.savez(npz_path, unit_axis=np.asarray(unit_axis, dtype=np.float64))
+
+    held_out_auc = dict(diagnostics["held_out_auc"])
+    held_out_seed_proj = held_out_auc.pop("held_out_seed_proj", None)
+    held_out_negative_proj = held_out_auc.pop("held_out_negative_proj", None)
+
+    npz_arrays = {"unit_axis": np.asarray(unit_axis, dtype=np.float64)}
+    if held_out_seed_proj is not None and held_out_negative_proj is not None:
+        npz_arrays["held_out_seed_proj"] = np.asarray(held_out_seed_proj, dtype=np.float64)
+        npz_arrays["held_out_negative_proj"] = np.asarray(held_out_negative_proj, dtype=np.float64)
+    np.savez(npz_path, **npz_arrays)
 
     manifest = {
         "header": {
@@ -858,7 +883,7 @@ def write_direction_artifact(
         "verdict": diagnostics["verdict"],
         "n_seeds": diagnostics["n_seeds"],
         "n_negatives": diagnostics["n_negatives"],
-        "held_out_auc": diagnostics["held_out_auc"],
+        "held_out_auc": held_out_auc,
         "topic_control": diagnostics["topic_control"],
         "bootstrap": diagnostics["bootstrap"],
         "null_reference": diagnostics["null_reference"],
@@ -902,6 +927,8 @@ class Direction:
     direction_sha256: str = ""
     header: Dict[str, Any] = field(default_factory=dict)
     manifest: Dict[str, Any] = field(default_factory=dict)
+    held_out_seed_proj: Optional[np.ndarray] = None
+    held_out_negative_proj: Optional[np.ndarray] = None
 
 
 def load_direction(json_path: str) -> Direction:
@@ -949,6 +976,17 @@ def load_direction(json_path: str) -> Direction:
 
     direction_sha256 = _sha256_of_file(npz_path)
 
+    held_out_seed_proj = (
+        np.asarray(npz["held_out_seed_proj"], dtype=np.float64)
+        if "held_out_seed_proj" in npz
+        else None
+    )
+    held_out_negative_proj = (
+        np.asarray(npz["held_out_negative_proj"], dtype=np.float64)
+        if "held_out_negative_proj" in npz
+        else None
+    )
+
     return Direction(
         embedding_model_id=header["embedding_model_id"],
         source_memmap_sha256=header["source_memmap_sha256"],
@@ -962,6 +1000,8 @@ def load_direction(json_path: str) -> Direction:
         direction_sha256=direction_sha256,
         header=header,
         manifest=manifest,
+        held_out_seed_proj=held_out_seed_proj,
+        held_out_negative_proj=held_out_negative_proj,
     )
 
 
@@ -1803,28 +1843,59 @@ def _standard_normal_quantile(p: float) -> float:
     )
 
 
+def _exact_precision_threshold(
+    held_out_seed_z: np.ndarray, held_out_negative_z: np.ndarray, target_precision: float
+) -> Optional[float]:
+    """D5 literal: "the projection z at which held-out seed-vs-negative
+    precision >= target". Scans every distinct held-out z (seed ∪ negative)
+    from highest to lowest as a candidate threshold; at each candidate,
+    precision = (held-out seeds at/above it) / (held-out seeds + negatives
+    at/above it). Returns the highest (most conservative) z at which that
+    precision first reaches ``target_precision``, or ``None`` if no candidate
+    threshold achieves it (target precision unreachable on this held-out
+    split -- caller falls back to the gaussian-quantile approximation).
+    """
+    seed_z = np.asarray(held_out_seed_z, dtype=np.float64)
+    neg_z = np.asarray(held_out_negative_z, dtype=np.float64)
+    if seed_z.size == 0 or neg_z.size == 0:
+        return None
+
+    candidates = np.unique(np.concatenate([seed_z, neg_z]))[::-1]  # highest first
+    best: Optional[float] = None
+    for z in candidates:
+        n_seed_above = int(np.sum(seed_z >= z))
+        n_neg_above = int(np.sum(neg_z >= z))
+        n_above = n_seed_above + n_neg_above
+        if n_above == 0:
+            continue
+        precision = n_seed_above / n_above
+        if precision >= target_precision:
+            best = float(z)  # keep scanning to the lowest z that still qualifies
+    return best
+
+
 def calibrate_threshold_from_direction(
     direction: "Direction", target_precision: float = DEFAULT_RATE_TARGET_PRECISION
 ) -> Dict[str, Any]:
     """D5: "the threshold is calibrated against the regex labels via the D3
     held-out AUC curve ... the projection z at which held-out seed-vs-negative
-    precision >= a target (default 0.9)". The direction artifact's manifest
-    does not persist the raw held-out projection arrays (only the summary AUC
-    diagnostics) -- so the achievable calibration from a Phase-2 artifact
-    alone is the summary-level one: read the recorded held_out_auc's implied
-    separation quality and gate on the leakage/verdict discipline already
-    computed, rather than re-deriving a precision-recall curve this module has
-    no raw scores to build. This is a bounded consequence of Phase 2's
-    persisted shape, named honestly rather than fabricating a quantile from
-    data that is not there.
+    precision >= a target (default 0.9)".
 
-    Returns ``{"threshold": z, "target_precision": p, "method": ...}``. When
-    the direction's null_reference is available, the threshold defaults to a
-    1.0-sigma-equivalent quantile scaled by held-out AUC as an honest
-    placeholder ("empirical quantile, not a sigma-multiple" per D5 is the
-    stated fallback when the true precision-recall curve is unavailable);
-    callers wanting the ADR's exact precision-targeted threshold should pass
-    an explicit ``threshold`` derived from their own held-out scores.
+    When the direction artifact persists the raw held-out projection arrays
+    (``held_out_seed_proj`` / ``held_out_negative_proj``, issue #66), this is
+    computed exactly: both arrays are z-scored against the recorded
+    ``null_reference`` (mu0, sigma0) and the empirical precision-recall curve
+    is scanned for the z at which held-out seed-vs-negative precision first
+    reaches ``target_precision`` (see :func:`_exact_precision_threshold`) --
+    the literal D5 method, no distributional assumption.
+
+    Older artifacts built before issue #66 (no raw arrays persisted), or a
+    held-out split whose empirical curve never reaches ``target_precision``,
+    fall back to the gaussian-quantile approximation from the summary
+    ``held_out_auc.auc`` -- an honest, explicitly-labeled placeholder, not the
+    exact D5 curve.
+
+    Returns ``{"threshold": z, "target_precision": p, "method": ...}``.
     """
     held_out_auc = direction.manifest.get("held_out_auc", {}) or {}
     auc = held_out_auc.get("auc")
@@ -1834,6 +1905,27 @@ def calibrate_threshold_from_direction(
             "calibrate a threshold without it. Re-run initialize_direction, "
             "or supply an explicit 'threshold' to query_rates."
         )
+
+    if direction.held_out_seed_proj is not None and direction.held_out_negative_proj is not None:
+        null_ref = direction.manifest.get("null_reference") or {}
+        mu0 = null_ref.get("mu0")
+        sigma0 = null_ref.get("sigma0")
+        if mu0 is not None and sigma0:
+            seed_z = z_scores(direction.held_out_seed_proj, float(mu0), float(sigma0))
+            neg_z = z_scores(direction.held_out_negative_proj, float(mu0), float(sigma0))
+            exact_threshold = _exact_precision_threshold(seed_z, neg_z, target_precision)
+            if exact_threshold is not None:
+                return {
+                    "threshold": round(exact_threshold, 4),
+                    "target_precision": target_precision,
+                    "source_auc": auc,
+                    "method": (
+                        "exact empirical precision-recall curve over the "
+                        "held-out seed/negative projections (D5 literal; "
+                        "issue #66)"
+                    ),
+                }
+
     # Standard-normal quantile via a dependency-free inverse-normal-CDF
     # approximation (no scipy in this project's dependency set, mirroring
     # auc_score's scipy-free precedent -- Python's stdlib math module has no
@@ -1848,8 +1940,8 @@ def calibrate_threshold_from_direction(
         "source_auc": auc,
         "method": (
             "gaussian-quantile approximation from held_out_auc.auc "
-            "(Phase 2 artifact does not persist raw held-out scores for an "
-            "exact precision-recall threshold; honest placeholder, see "
+            "(no raw held-out scores on this artifact, or the empirical "
+            "curve never reached target_precision; honest placeholder, see "
             "calibrate_threshold_from_direction docstring)"
         ),
     }

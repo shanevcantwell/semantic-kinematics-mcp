@@ -116,13 +116,20 @@ def _write_direction_artifact(
     null_mu0: float = 0.0,
     null_sigma0: float = 1.0,
     held_out_auc: float = 0.85,
+    held_out_seed_proj: np.ndarray = None,
+    held_out_negative_proj: np.ndarray = None,
 ) -> str:
+    held_out_auc_block = {"auc": held_out_auc, "leakage_suspected": False}
+    if held_out_seed_proj is not None:
+        held_out_auc_block["held_out_seed_proj"] = held_out_seed_proj
+    if held_out_negative_proj is not None:
+        held_out_auc_block["held_out_negative_proj"] = held_out_negative_proj
     diagnostics = {
         "pole_separation": 1.0,
         "verdict": verdict,
         "n_seeds": 41,
         "n_negatives": 41,
-        "held_out_auc": {"auc": held_out_auc, "leakage_suspected": False},
+        "held_out_auc": held_out_auc_block,
         "topic_control": {"seed_vs_negative_auc": 0.8},
         "bootstrap": {"mean_pairwise_cosine": 0.9},
         "null_reference": {"mu0": null_mu0, "sigma0": null_sigma0, "n": 200},
@@ -800,6 +807,82 @@ def test_calibrate_threshold_higher_auc_yields_higher_threshold(tmp_path, scene)
     direction.manifest["held_out_auc"] = {"auc": 0.55}
     low = calibrate_threshold_from_direction(direction, target_precision=0.9)
     assert high["threshold"] > low["threshold"]
+
+
+def test_calibrate_threshold_uses_exact_curve_when_raw_projections_present(tmp_path):
+    """issue #66: when the direction artifact carries the raw held-out
+    projection arrays, calibrate_threshold_from_direction computes the exact
+    D5 empirical precision-recall threshold instead of the gaussian-quantile
+    approximation."""
+    mu = np.zeros(DIM)
+    calibration = _make_calibration(mu, "unused.f32", 20)
+    unit_axis = np.zeros(DIM)
+    unit_axis[0] = 1.0
+
+    # Hand-built held-out projections (already in raw-projection units;
+    # null_reference mu0=0/sigma0=1 below makes z == raw projection).
+    # Seeds: 1, 2, 3, 4, 5.  Negatives: -2, -1, 0, 0.5, 3.5.
+    # At threshold z=2: seeds >= 2 -> {2,3,4,5} = 4; negatives >= 2 -> {3.5} = 1.
+    # precision = 4/5 = 0.8. At z=3: seeds -> {3,4,5}=3, negs -> {3.5}=1,
+    # precision = 3/4 = 0.75. At z=3.5: seeds -> {4,5}=2, negs -> {3.5}=1,
+    # precision = 2/3 = 0.667. So target_precision=0.8 is reached exactly at
+    # z=2 (the highest z with precision >= 0.8, scanning downward keeps the
+    # lowest qualifying z per the function's "keep scanning" contract --
+    # verify against a hand re-derivation instead of hardcoding the scan
+    # order assumption).
+    seed_proj = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    neg_proj = np.array([-2.0, -1.0, 0.0, 0.5, 3.5])
+
+    direction_json = _write_direction_artifact(
+        tmp_path, calibration, unit_axis,
+        null_mu0=0.0, null_sigma0=1.0, held_out_auc=0.8,
+        held_out_seed_proj=seed_proj, held_out_negative_proj=neg_proj,
+    )
+    direction = d.load_direction(direction_json)
+    assert direction.held_out_seed_proj is not None
+
+    result = calibrate_threshold_from_direction(direction, target_precision=0.8)
+    assert "exact empirical precision-recall curve" in result["method"]
+
+    # Verify the returned threshold actually achieves >= target precision
+    # against the same held-out arrays (contract check, not a hardcoded value).
+    thr = result["threshold"]
+    n_seed_above = int(np.sum(seed_proj >= thr))
+    n_neg_above = int(np.sum(neg_proj >= thr))
+    precision = n_seed_above / (n_seed_above + n_neg_above)
+    assert precision >= 0.8
+
+
+def test_calibrate_threshold_falls_back_to_gaussian_when_no_raw_projections(tmp_path, scene):
+    """Artifacts without the raw arrays (pre-#66, or empty held_out_auc
+    block) keep the honestly-labeled gaussian-quantile approximation."""
+    direction = d.load_direction(scene["direction_json"])
+    assert direction.held_out_seed_proj is None
+    result = calibrate_threshold_from_direction(direction, target_precision=0.9)
+    assert "gaussian-quantile approximation" in result["method"]
+
+
+def test_calibrate_threshold_falls_back_when_target_precision_unreachable(tmp_path):
+    """When even the highest-z candidate threshold cannot reach
+    target_precision on the held-out split, fall back to the gaussian
+    approximation rather than returning a threshold that overclaims."""
+    mu = np.zeros(DIM)
+    calibration = _make_calibration(mu, "unused.f32", 20)
+    unit_axis = np.zeros(DIM)
+    unit_axis[0] = 1.0
+
+    # Perfectly interleaved -- no threshold ever reaches 0.99 precision.
+    seed_proj = np.array([0.0, 1.0, 2.0])
+    neg_proj = np.array([0.0, 1.0, 2.0])
+
+    direction_json = _write_direction_artifact(
+        tmp_path, calibration, unit_axis,
+        null_mu0=0.0, null_sigma0=1.0, held_out_auc=0.5,
+        held_out_seed_proj=seed_proj, held_out_negative_proj=neg_proj,
+    )
+    direction = d.load_direction(direction_json)
+    result = calibrate_threshold_from_direction(direction, target_precision=0.99)
+    assert "gaussian-quantile approximation" in result["method"]
 
 
 # --------------------------------------------------------------------------- #
