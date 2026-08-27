@@ -53,7 +53,7 @@ def test_embed_text_with_empty_model_returns_structured_error():
 
 def test_embed_text_schema_requires_model_and_has_no_default():
     tools = {t.name: t for t in embeddings.get_tools()}
-    schema = tools["embed_text"].inputSchema
+    schema = tools["embed_text"].input_schema
     assert "model" in schema["required"]
     assert "default" not in schema["properties"]["model"]
 
