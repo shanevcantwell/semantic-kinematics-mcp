@@ -10,6 +10,12 @@ Example:
     python scripts/embed_corpus.py corpus.jsonl --checkpoint out.jsonl \\
         --backend lmstudio --base-url http://localhost:8082/v1 \\
         --model embeddinggemma-300M-F32
+
+For the ``lmstudio`` backend, ``--model``/``--base-url`` may also come from the
+``EMBEDDING_MODEL``/``EMBEDDING_SERVER_URL`` environment variables (same
+resolution chain as the MCP server's StateManager: explicit arg -> env -> hard
+fail). No baked model/endpoint default (Rule #14) -- a silently-wrong-model run
+is an unacceptable failure class.
 """
 
 import argparse
@@ -73,13 +79,32 @@ def main(argv=None):
     parser.add_argument("corpus", help="Path to input JSONL corpus.")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint JSONL path.")
     parser.add_argument("--backend", default="lmstudio", help="Embedding backend.")
-    parser.add_argument("--base-url", default="http://localhost:8082/v1")
-    parser.add_argument("--model", default="embeddinggemma-300M-F32")
+    parser.add_argument(
+        "--base-url",
+        default=os.environ.get("EMBEDDING_SERVER_URL"),
+        help="lmstudio endpoint (required for --backend lmstudio; falls back to "
+             "EMBEDDING_SERVER_URL; no baked default -- Rule #14).",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("EMBEDDING_MODEL"),
+        help="lmstudio model id (required for --backend lmstudio; falls back to "
+             "EMBEDDING_MODEL; no baked default -- Rule #14).",
+    )
     parser.add_argument("--text-field", default="text")
     parser.add_argument("--id-field", default="chunk_id")
     parser.add_argument("--max-tokens-per-request", type=int, default=3000)
     parser.add_argument("--max-tokens-per-chunk", type=int, default=1500)
     args = parser.parse_args(argv)
+
+    if args.backend == "lmstudio" and not args.model:
+        parser.error(
+            "--model is required for --backend lmstudio (or set EMBEDDING_MODEL)"
+        )
+    if args.backend == "lmstudio" and not args.base_url:
+        parser.error(
+            "--base-url is required for --backend lmstudio (or set EMBEDDING_SERVER_URL)"
+        )
 
     items = _read_items(args.corpus, args.text_field, args.id_field)
     print(f"[embed_corpus] loaded {len(items)} items from {args.corpus}", file=sys.stderr)
