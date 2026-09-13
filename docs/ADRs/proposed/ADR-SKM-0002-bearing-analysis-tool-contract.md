@@ -1,14 +1,14 @@
-# ADR-SKMCP-0002: Bearing-Analysis Tool Contract for sk-mcp
+# ADR-SKM-0002: Bearing-Analysis Tool Contract for sk-mcp
 
 **Status:** proposed
 **Date:** 2026-06-15 (US/Mountain)
 **Author:** shanevcantwell, with Claude (Claude Code) as drafting collaborator
-**Related:** ADR-SKMCP-0001 (the directional-projection *primitive* this contract operationalizes); ADR-001 (the position-regime sibling whose `build_axis_null.py` → `analyze_axis_alignment` pair is the template); ADR-002 (canonical `model_name`, sk-mcp #11); ADR-003 (stateless MCP cutover, sk-mcp #2); `data/anchors/escalation_grid.yaml` (the first axis input); `docs/HANDOFF.md` §8 (regime split)
+**Related:** ADR-SKM-0001 (the directional-projection *primitive* this contract operationalizes); ADR-SKM-0007 (the position-regime sibling whose `build_axis_null.py` → `analyze_axis_alignment` pair is the template); ADR-SKM-0008 (canonical `model_name`, sk-mcp #11); ADR-SKM-0009 (stateless MCP cutover, sk-mcp #2); `data/anchors/escalation_grid.yaml` (the first axis input); `docs/HANDOFF.md` §8 (regime split)
 
 **Supersedes:** —
 **Superseded by:** —
 
-> **Relationship to ADR-SKMCP-0001:** 0001 fixes the *math* — what a directional
+> **Relationship to ADR-SKM-0001:** 0001 fixes the *math* — what a directional
 > projection is (signed component + orthogonal residual + cosine), that the null
 > must be measured, and that a measurement is single-embedder. This ADR (0002)
 > fixes the *tool contract* — how that primitive is surfaced as an MCP tool family
@@ -19,7 +19,7 @@
 
 ## Context
 
-ADR-SKMCP-0001 specified the bearing primitive but left the tool surface open. Three
+ADR-SKM-0001 specified the bearing primitive but left the tool surface open. Three
 facts constrain how it should ship, and together they pick the shape:
 
 1. **The confidence procedure is multi-step, but the north star is one-step.** A
@@ -37,7 +37,7 @@ facts constrain how it should ship, and together they pick the shape:
    has *endless patience* for setup but calls the measurement *in a loop*, so expense
    must live in setup and the hot path must be cheap.
 
-3. **The position regime already proved the pattern.** ADR-001 ships as a *two-part
+3. **The position regime already proved the pattern.** ADR-SKM-0007 ships as a *two-part
    instrument*: a build step (`build_axis_null.py`) that does the expensive work once and
    emits a self-describing, model-keyed artifact, plus a one-call tool
    (`analyze_axis_alignment`) that consumes it with significance already baked in. That
@@ -69,7 +69,7 @@ scale — it is not the bulk data-plane job that ARCHITECTURE.md keeps outside M
 
 A manifest + `.npy`, carrying everything `run` needs to **refuse misuse**:
 
-- canonical `model_name` (per ADR-002) + **embedder identity** + dimensionality (e.g. 768
+- canonical `model_name` (per ADR-SKM-0008) + **embedder identity** + dimensionality (e.g. 768
   for embeddinggemma vs 4096 for NV-Embed-v2)
 - `axis`: the validated axis vector(s)
 - `axis_validation`: SVD spectrum, coherence figures, verdict
@@ -103,7 +103,7 @@ minimum call surface and cannot get the embedder wrong.
    displacements; a too-clean / too-high-yield result is surfaced as an **alarm**, not a
    win. A "clean-looking curve" is not the deliverable.
 5. **Target-state forms.** Designed against the post-cutover surface: per-call canonical
-   `model_name` + `base_url` (ADR-003/#2, ADR-002/#11); no `model_load`/`model_unload`
+   `model_name` + `base_url` (ADR-SKM-0009/#2, ADR-SKM-0008/#11); no `model_load`/`model_unload`
    dependence; no backend-prefixed model identities.
 
 ### Errors instruct, they don't just report
@@ -126,7 +126,7 @@ measured, not assumed.
 
 ## Rationale
 
-The pattern is proven (ADR-001), the layering is sanctioned (precomputed-vector consume
+The pattern is proven (ADR-SKM-0007), the layering is sanctioned (precomputed-vector consume
 is not bulk ingestion), and the shape falls directly out of the two priorities: *one-step
 reproducibility* forces the expensive confidence procedure into the build artifact, and
 *non-frontier agent ergonomics* force a lifecycle-named family, an embedder-pinned hot
@@ -162,7 +162,7 @@ the artifact records, not a runtime detail.
 ### Option A: One MCP tool that does everything per call
 **Why rejected:** It would rebuild the null and re-validate the axis on every
 measurement — fatal to the fast-interaction priority — or silently cache, reintroducing
-the stateful coupling ADR-003 is removing. The build/consume split is what makes the hot
+the stateful coupling ADR-SKM-0009 is removing. The build/consume split is what makes the hot
 path cheap and the result reproducible.
 
 ### Option B: Keep the build as a shell script (mirror `build_axis_null.py` exactly)
@@ -191,11 +191,11 @@ a silent default).
   `run_axis_analysis` + `initialize_axis_analysis` for cross-regime naming symmetry. Out
   of scope here; a rename of a shipped tool.
 - [ ] **semantic-forge schema integration.** Exact field replacing `mean_velocity` in the
-  DPO/ORPO JSONL (carried from ADR-SKMCP-0001 OQ3).
+  DPO/ORPO JSONL (carried from ADR-SKM-0001 OQ3).
 
 ## Supersession Relationships
 
-**Supersedes:** — (additive; operationalizes ADR-SKMCP-0001, does not replace a tool)
+**Supersedes:** — (additive; operationalizes ADR-SKM-0001, does not replace a tool)
 **Superseded by:** TBD — if the escalation axis collapses to a single dominant direction
 (0001 OQ1 / Spike A), `initialize` may emit a single-axis artifact and the family may
 narrow; if the position and bearing regimes are unified under one "measure behavioral
@@ -204,7 +204,7 @@ axis" surface, this contract folds into it.
 ## Notes
 
 The honesty marker for this ADR: the contract is **not novel architecture**. It is the
-ADR-001 build-validated-artifact + one-call-consume pattern extended one regime over, with
+ADR-SKM-0007 build-validated-artifact + one-call-consume pattern extended one regime over, with
 the agent-ergonomic and statistical-discipline rules made explicit. The value is the
 *discipline encoded as refusals* — validation-as-precondition, embedder-pinning,
 circularity and falsification guards — not the structure, which is borrowed. Every

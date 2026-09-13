@@ -3,7 +3,7 @@
   "source": "data/absurdism/bypass_dialogue.txt",
   "segmenter": "semantic_kinematics.bearing.phrase_segment.segment",
   "authored": "2026-06-16 (US/Mountain)",
-  "authored_discipline": "Indices, controls, sigma, and decision rule fixed from the SEGMENTED TEXT ALONE, before building the conditioned null or running any scoring. Pre-registration per ADR-SKMCP-0003 verdict discipline; this is what makes the both-ways-decisive claim hold and bounds the comparison count to the named indices.",
+  "authored_discipline": "Indices, controls, sigma, and decision rule fixed from the SEGMENTED TEXT ALONE, before building the conditioned null or running any scoring. Pre-registration per ADR-SKM-0003 verdict discipline; this is what makes the both-ways-decisive claim hold and bounds the comparison count to the named indices.",
   "n_phrases": 91,
 
   "punchline_indices": [72, 74],
@@ -37,5 +37,5 @@
     "71": "'That's the display department.' — comedic straight-line adjacent to 72; left as a neighbor (isolation check), not a registered punchline, to avoid adjacent-punchline contamination of the neighbor-non-clearance criterion."
   },
 
-  "verdict_outcome": "NEGATIVE (2026-06-16). Neither punchline (72,74) clears sigma=3.0 in its finest-level (k|4-7|SET_QUOTE, n=1368) stratum at any k; equal-format controls and scene-shift controls also stay within ~1 sigma. Per the pre-registered bound: magnitude cannot separate comedic from scene/ordinary discontinuity AT EQUAL FORMATTING (NOT 'no signal'). Sub-finding: punchline 72's z rises monotonically with k (-1.66 -> +0.82, ~2.5 sigma in the predicted direction) but stays sub-threshold; 74 does not. Result artifact: output/ramp_deadpan_bypass_result.json. Cleanest case yet for bearing-not-magnitude; aims at the projection/situatedness track (ADR-SKMCP-0001, unbuilt anchor). Raw deadpan 0.69-0.81 declined with k (confound-1 k-artifact, diagnostic only, NOT a detection)."
+  "verdict_outcome": "NEGATIVE (2026-06-16). Neither punchline (72,74) clears sigma=3.0 in its finest-level (k|4-7|SET_QUOTE, n=1368) stratum at any k; equal-format controls and scene-shift controls also stay within ~1 sigma. Per the pre-registered bound: magnitude cannot separate comedic from scene/ordinary discontinuity AT EQUAL FORMATTING (NOT 'no signal'). Sub-finding: punchline 72's z rises monotonically with k (-1.66 -> +0.82, ~2.5 sigma in the predicted direction) but stays sub-threshold; 74 does not. Result artifact: output/ramp_deadpan_bypass_result.json. Cleanest case yet for bearing-not-magnitude; aims at the projection/situatedness track (ADR-SKM-0001, unbuilt anchor). Raw deadpan 0.69-0.81 declined with k (confound-1 k-artifact, diagnostic only, NOT a detection)."
 }

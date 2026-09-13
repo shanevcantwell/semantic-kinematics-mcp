@@ -1,9 +1,9 @@
-# ADR-SKMCP-0005: Absolute affect/jolt measurements falsified on embeddinggemma-300m — contrastive drift survives
+# ADR-SKM-0005: Absolute affect/jolt measurements falsified on embeddinggemma-300m — contrastive drift survives
 
 **Status:** proposed
 **Date:** 2026-07-09 (US/Mountain)
 **Author:** shanevcantwell, with Claude (Claude Code) as drafting collaborator
-**Related:** ADR-SKMCP-0001 (directional-projection primitive); ADR-SKMCP-0003 (context-conditioned embedding atom / jolt — this ADR records its EG-300m result); ADR-SKMCP-0004 (affect-geometry substrate decision — nv-embed-v2, not embeddinggemma); sk-mcp issue #18 (rename `deadpan_score`/`heller_score` — mooted by this ADR); semantic-forge (sibling consumer, `README.md` JSONL example)
+**Related:** ADR-SKM-0001 (directional-projection primitive); ADR-SKM-0003 (context-conditioned embedding atom / jolt — this ADR records its EG-300m result); ADR-SKM-0004 (affect-geometry substrate decision — nv-embed-v2, not embeddinggemma); sk-mcp issue #18 (rename `deadpan_score`/`heller_score` — mooted by this ADR); semantic-forge (sibling consumer, `README.md` JSONL example)
 
 **Supersedes:** —
 **Superseded by:** —
@@ -27,9 +27,9 @@ artifact in `data/nulls/` was built on:
    `docs/trajectory-analysis.md` / `docs/ARCHITECTURE.md`.
 2. **The `jolt` concept** — absolute displacement-magnitude event detection
    (`semantic_kinematics/bearing/jolt.py`: `DisplacementNull`,
-   `ConditionedDisplacementNull`, `score_jolts`), decided in ADR-SKMCP-0003.
-3. *(Implicitly, the affect-direction bearing track generally, per ADR-SKMCP-0004's
-   FLAT escalation result — named here for completeness; ADR-SKMCP-0004 already
+   `ConditionedDisplacementNull`, `score_jolts`), decided in ADR-SKM-0003.
+3. *(Implicitly, the affect-direction bearing track generally, per ADR-SKM-0004's
+   FLAT escalation result — named here for completeness; ADR-SKM-0004 already
    records its own falsification and this ADR does not restate it.)*
 
 **Provenance of `deadpan_score`/`heller_score` (recorded plainly, not softened):**
@@ -41,8 +41,8 @@ work." This distinction matters for how the finding below is read: it is not a
 regression, it is a correction of standing.
 
 **The `jolt` measurement**, by contrast, *was* a properly-decided instrument
-(ADR-SKMCP-0003) run under a pre-registered falsification protocol. Its 2026-06-16
-result (recorded in ADR-SKMCP-0003 itself) was **VERDICT: NEGATIVE** — the
+(ADR-SKM-0003) run under a pre-registered falsification protocol. Its 2026-06-16
+result (recorded in ADR-SKM-0003 itself) was **VERDICT: NEGATIVE** — the
 conditioned-displacement-magnitude channel could not separate the deadpan
 punchlines from equal-format scene-shift controls on EG-300m, at any context-ramp
 `k`. That result stands as built; this ADR folds it into the same generalizable
@@ -61,7 +61,7 @@ falsification below; see Decision §2.
    EG-300m:**
    - `deadpan_score` and `heller_score` — statistically below EG-300m's noise
      floor. Never operator-endorsed; confabulated over live objection.
-   - `jolt` (absolute displacement-magnitude event detection, ADR-SKMCP-0003) —
+   - `jolt` (absolute displacement-magnitude event detection, ADR-SKM-0003) —
      measured completely flat on EG-300m under the pre-registered protocol.
 
 2. **Contrastive drift survives and is explicitly NOT tombstoned.** Differential
@@ -75,7 +75,7 @@ falsification below; see Decision §2.
    explanation, not a proven law:**
 
    > On an isotropy-regularized / cone-flattened embedder like EG-300m (see
-   > ADR-SKMCP-0004: the spread-out regularizer pushes random input pairs toward
+   > ADR-SKM-0004: the spread-out regularizer pushes random input pairs toward
    > similar low-order statistics, homogenizing off-MTEB-objective directions),
    > **absolute-magnitude measurements sit against the embedder's own noise and
    > fall below it**, because the isotropy regularizer co-compresses signal with
@@ -90,7 +90,7 @@ falsification below; see Decision §2.
    pursuing on this substrate.
 
 4. **Scope: nv-embed-v2 is deprioritized, not tested, and not a closed negative.**
-   All three falsifications above are scoped to EG-300m only. ADR-SKMCP-0004
+   All three falsifications above are scoped to EG-300m only. ADR-SKM-0004
    already names nv-embed-v2 as the correct substrate for affect/bearing work
    precisely because its cone is preserved and characterized rather than
    regularized away. A re-test of absolute measurements on nv-embed-v2 is
@@ -123,7 +123,7 @@ The three-part test for recording this as an ADR:
   there is no compat surface worth preserving under a new name for a measurement
   that was never load-bearing and sits below noise. **Action:** close issue #18
   with a pointer to this ADR.
-- **`semantic_kinematics/bearing/jolt.py` and ADR-SKMCP-0003 stand as built.** This
+- **`semantic_kinematics/bearing/jolt.py` and ADR-SKM-0003 stand as built.** This
   ADR records their EG-300m *result*, it does not delete code, revert the ADR, or
   retract the module. The instrument was correctly built and correctly falsified
   under its own pre-registered protocol; that is a clean negative, not a defect.
@@ -163,7 +163,7 @@ The three-part test for recording this as an ADR:
 | `docs/trajectory-analysis.md`, `docs/ARCHITECTURE.md` | Doc references. |
 | `docs/SPINE.md`, `docs/HANDOFF.md` | Standing project narrative — should eventually point here; not edited by this ADR. |
 | `docs/research/residual-stream-jolt-survey.md` | Related research note. |
-| `docs/ADRs/proposed/ADR-SKMCP-0003-context-conditioned-embedding-atom.md` | The decision + pre-registered result this ADR folds in. |
+| `docs/ADRs/proposed/ADR-SKM-0003-context-conditioned-embedding-atom.md` | The decision + pre-registered result this ADR folds in. |
 
 ## Open Questions
 
@@ -175,7 +175,7 @@ The three-part test for recording this as an ADR:
   "law" or surfaces a counterexample.
 - [ ] **Would absolute measurements (deadpan/heller/jolt) read differently on
   nv-embed-v2?** **Resolution trigger:** deprioritized per Decision §4 — only
-  worth running if the nv-embed-v2 substrate work from ADR-SKMCP-0004 proceeds for
+  worth running if the nv-embed-v2 substrate work from ADR-SKM-0004 proceeds for
   other reasons and re-running the absolute measurements becomes near-free as a
   byproduct.
 - [ ] **Issue #18 closure.** **Resolution trigger:** close with a pointer to this
@@ -183,7 +183,7 @@ The three-part test for recording this as an ADR:
 
 ## Supersession Relationships
 
-**Supersedes:** — (does not replace ADR-SKMCP-0003's decision; folds in its
+**Supersedes:** — (does not replace ADR-SKM-0003's decision; folds in its
 already-recorded EG-300m result as one of three negatives sharing a common cause)
 **Superseded by:** TBD — a confirmed nv-embed-v2 re-test or a broader-n replication
 of the isotropy/contrastive finding may narrow or extend this record.

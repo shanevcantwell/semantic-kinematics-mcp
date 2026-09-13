@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""The look (ADR-SKMCP-0003 Phase 4): conditioned deadpan ramp on a specimen.
+"""The look (ADR-SKM-0003 Phase 4): conditioned deadpan ramp on a specimen.
 
 Reads a PRE-REGISTERED verdict spec, builds the context-conditioned trajectory at
 each ``k``, scores each step's displacement magnitude against the measured
 per-(k×length×demarcator) null, and applies the pre-registered decision rule.
 
-Verdict discipline (ADR-SKMCP-0003):
+Verdict discipline (ADR-SKM-0003):
 - The verdict is the **null-calibrated flag pattern**, NOT the raw deadpan/heller
   curves (those drift monotonically with ``k`` as a geometric artifact and are
   reported diagnostic-only).

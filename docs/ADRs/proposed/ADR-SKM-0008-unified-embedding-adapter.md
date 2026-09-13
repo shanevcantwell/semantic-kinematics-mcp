@@ -1,12 +1,16 @@
-# ADR-002: Unified embedding adapter across kinematics and thought-vault
+# ADR-SKM-0008: Unified embedding adapter across kinematics and thought-vault
 
 **Status:** Accepted (2026-06-11)
 **Date:** 2026-06-07
 
-> **Note on file path:** This file remains at `docs/ADRs/proposed/ADR-002-unified-embedding-adapter.md`
-> and will not be moved. Several documents across this repo and a private sibling repo link to
-> this exact path; moving it would break those references. The Status field above is authoritative
-> for the acceptance state of this ADR.
+> **Note on file path (superseded 2026-07-18):** This file previously stated it would
+> remain at `docs/ADRs/proposed/ADR-002-unified-embedding-adapter.md` and not be moved,
+> because a private sibling repo links to that exact path. The ADR-namespace-unification
+> migration (docs/HANDOFF.md "Numbering note") moved it anyway, to
+> `docs/ADRs/proposed/ADR-SKM-0008-unified-embedding-adapter.md` — **the old path is now a
+> dangling link in any sibling repo that has not been updated.** The Status field above
+> remains authoritative for the acceptance state of this ADR; the old-path breakage is
+> tracked as migration residue in the reconciliation PR.
 
 ## Context
 
@@ -40,15 +44,15 @@ Three facts make unification more than tidiness:
 1. **The OpenAI-compatible path is literally the same protocol.** The kinematics
    `LMStudioAdapter` and the vault `EmbeddingBridge` differ only in HTTP client
    (`openai` vs `requests`) and in the bulk machinery layered on top.
-2. **ADR-001's axis-alignment null is keyed by `model_name` and refuses a
+2. **ADR-SKM-0007's axis-alignment null is keyed by `model_name` and refuses a
    mismatch.** Today the vault produces `embeddinggemma-300M-F32.gguf` while the
    kinematics LM Studio adapter produces `LMStudio:<model>` — so the vault's
-   real-conversation corpus, the exact empirical null ADR-001 wants, **cannot be
+   real-conversation corpus, the exact empirical null ADR-SKM-0007 wants, **cannot be
    dropped into the null cache**. A shared adapter with a canonical `model_name`
    dissolves this by construction.
 3. **Normalization is inconsistent and load-bearing.** The SentenceTransformers
    adapter L2-normalizes by default; the LM Studio adapter does **not**; the
-   vault bridge **averages sub-chunk vectors**, which breaks unit norm. ADR-001's
+   vault bridge **averages sub-chunk vectors**, which breaks unit norm. ADR-SKM-0007's
    z-score sharpness depends on L2-normalized inputs. A single code path is the
    only place to make normalization a deliberate, consistent contract.
 
@@ -60,7 +64,7 @@ Three facts make unification more than tidiness:
    for LM Studio **and** llama-server, parameterized by `base_url` and `model`.
 
 2. **`model_name` is a canonical model identity, not a backend label.** The null
-   match in ADR-001 requires that the *same model served two ways* yields the
+   match in ADR-SKM-0007 requires that the *same model served two ways* yields the
    *same* `model_name`. Decision: `model_name` reports the underlying model id
    (e.g. `embeddinggemma-300M-F32`), not a `Backend:` prefix. Backend/transport
    becomes separate metadata, not part of the identity the null keys on.
@@ -74,7 +78,7 @@ Three facts make unification more than tidiness:
 
 4. **Normalization is an explicit adapter contract.** Each adapter declares
    whether it returns L2-normalized vectors; `BulkEmbedder` re-normalizes after
-   sub-chunk averaging when the adapter contract is "normalized." ADR-001
+   sub-chunk averaging when the adapter contract is "normalized." ADR-SKM-0007
    consumers can then assume unit norm without guessing.
 
 5. **Config, never hardcode.** Model and endpoint resolve from factory
@@ -86,7 +90,7 @@ Three facts make unification more than tidiness:
      kinematics already owns the ABC, factory, and three backends. Heals the
      original broken import directly. The personal-data boundary is **not**
      violated: the adapter carries no personal data; only the vault's *corpus*
-     does, and that stays local per ADR-001 Decision 4.
+     does, and that stays local per ADR-SKM-0007 Decision 4.
    - **(B) Extract a standalone `embedding-adapters` package** both repos
      depend on. Cleanest separation, but a new repo/package and two more
      dependency edges to version and release.
@@ -103,10 +107,10 @@ Three facts make unification more than tidiness:
 
 ## Consequences
 
-- **The ADR-001 null gains its intended corpus.** Once the vault embeds through
+- **The ADR-SKM-0007 null gains its intended corpus.** Once the vault embeds through
   the shared adapter, its real-conversation embeddings carry a matching
   `model_name` and drop straight into the axis-alignment null cache — the
-  "real-exchange corpus as empirical null" ADR-001 named as the real validation.
+  "real-exchange corpus as empirical null" ADR-SKM-0007 named as the real validation.
 - **One embedding code path** to maintain; the vault's bulk robustness becomes
   available to kinematics' own bulk needs (e.g. building large nulls).
 - **Costs / risks:** a cross-repo dependency edge (kinematics ← vault); a
@@ -118,7 +122,7 @@ Three facts make unification more than tidiness:
   normalization belongs in the adapter or strictly downstream; retiring
   `EmbeddingBridge` after the shim bake-in.
 
-**Cross-refs:** ADR-001 (`docs/ADRs/proposed/ADR-001-referential-axis-alignment.md`,
+**Cross-refs:** ADR-SKM-0007 (`docs/ADRs/proposed/ADR-SKM-0007-referential-axis-alignment.md`,
 the null `model_name` guard); `embeddings/base.py` (the ABC),
 `embeddings/__init__.py` (the factory), `embeddings/lmstudio.py` (the adapter to
 generalize), `embeddings/sentence_transformers_adapter.py` (normalization
@@ -126,8 +130,8 @@ contract); thought-vault `thought_vault_integration/embedding_bridge.py` (the
 bulk machinery to extract) and its `docs/embedding-checkpoint-bug.md`.
 
 **Open threads:**
-- ADR numbering across the two repos (kinematics `ADR-00N` vs the vault's own
-  `ADR-003/004` scheme). *(Still open.)*
+- ADR numbering across the two repos (kinematics `ADR-00N`, now `ADR-SKM-000N`,
+  vs the vault's own `ADR-003/004` scheme). *(Still open.)*
 - ~~Exact canonical-`model_name` format and how transport metadata travels
   alongside it.~~ → Resolved. See Resolution 1.
 - ~~Whether `BulkEmbedder` lives beside the adapters or in its own module.~~
@@ -141,11 +145,11 @@ bulk machinery to extract) and its `docs/embedding-checkpoint-bug.md`.
 
 ### Resolution 1 — Canonical `model_name` format
 
-Settled jointly with ADR-003 Resolution 1: `model_name` is **the same canonical
+Settled jointly with ADR-SKM-0009 Resolution 1: `model_name` is **the same canonical
 string llauncher uses** (e.g. `embeddinggemma-300M-F32`) — the model's identity
 independent of transport. No `Backend:` prefix, no `.gguf` suffix. Transport
 metadata (backend type, `base_url`) rides beside `model_name` as adapter
-construction detail and is never part of the identity the ADR-001 null cache
+construction detail and is never part of the identity the ADR-SKM-0007 null cache
 keys on. Changing this string remains a null-cache-invalidating event; existing
 caches keyed by legacy strings (`LMStudio:<model>`,
 `embeddinggemma-300M-F32.gguf`) must be rebuilt or remapped during migration

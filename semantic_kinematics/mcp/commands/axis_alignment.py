@@ -7,7 +7,7 @@ measures *referential* geometry: how strongly a passage marches along a
 caller-specified semantic axis, and whether that march is significant relative
 to a background-corpus null.
 
-See docs/ADRs/proposed/ADR-001-referential-axis-alignment.md.
+See docs/ADRs/proposed/ADR-SKM-0007-referential-axis-alignment.md.
 
 Tools:
 - analyze_axis_alignment: project a passage onto an anchor-defined axis and

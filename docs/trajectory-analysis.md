@@ -222,11 +222,11 @@ Consequences:
 - Do **not** re-trust the typical-values table unaudited. Treat those numbers as
   targets the instrument was built to hit on a different embedder, not as
   observed behavior of the current pipeline.
-- This non-reproduction is the motivation for **ADR-SKMCP-0003
+- This non-reproduction is the motivation for **ADR-SKM-0003
   (context-conditioned embedding atom)**: the sentence-as-point atom may be the
   wrong unit for the signal this instrument is trying to detect.
 
-See `docs/ADRs/proposed/ADR-SKMCP-0003-context-conditioned-embedding-atom.md`.
+See `docs/ADRs/proposed/ADR-SKM-0003-context-conditioned-embedding-atom.md`.
 
 ## Relationship to the bearing regime
 
@@ -236,8 +236,8 @@ different atom and a different null.
 
 | Regime | Question | Atom | Null | Tool |
 |---|---|---|---|---|
-| Position / rhythm | "where does this sit / how does it drift?" | sentence (point) | corpus-null (where real text sits) | ADR-001 axis-alignment; this trajectory analyzer (velocity / accel / curvature) |
-| Bearing / motion | "which way did this move vs a named axis?" | displacement (+ anchor pair) | measured-displacement-null (random motion under anisotropy) | ADR-SKMCP-0001 projection primitive |
+| Position / rhythm | "where does this sit / how does it drift?" | sentence (point) | corpus-null (where real text sits) | ADR-SKM-0007 axis-alignment; this trajectory analyzer (velocity / accel / curvature) |
+| Bearing / motion | "which way did this move vs a named axis?" | displacement (+ anchor pair) | measured-displacement-null (random motion under anisotropy) | ADR-SKM-0001 projection primitive |
 
 The position regime is **magnitude and cadence only**. Velocity is a norm and so
 discards direction; curvature and drift are reflexive angles between the path's
@@ -248,5 +248,5 @@ high dimensionality sharpens the measurement rather than washing it out.
 
 See:
 
-- `docs/ADRs/proposed/ADR-SKMCP-0001-directional-projection-primitive.md`
-- `docs/ADRs/proposed/ADR-SKMCP-0003-context-conditioned-embedding-atom.md`
+- `docs/ADRs/proposed/ADR-SKM-0001-directional-projection-primitive.md`
+- `docs/ADRs/proposed/ADR-SKM-0003-context-conditioned-embedding-atom.md`

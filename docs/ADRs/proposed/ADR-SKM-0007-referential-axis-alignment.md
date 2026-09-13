@@ -1,4 +1,4 @@
-# ADR-001: Referential axis-alignment analysis (`analyze_axis_alignment`)
+# ADR-SKM-0007: Referential axis-alignment analysis (`analyze_axis_alignment`)
 
 **Status:** Proposed
 **Date:** 2026-05-29
@@ -96,7 +96,7 @@ codebase — all intra-passage. This layer is net-new.
 (adapter + cache), `server.py` (dispatch).
 
 **Open threads:**
-- ADR numbering — project-local `ADR-001` vs. the `ADR-CORE-NNN` scheme from
+- ADR numbering — project-local `ADR-SKM-0007` vs. the `ADR-CORE-NNN` scheme from
   `adr-namer-draft.sh`.
 - Null-cache location/manifest schema as it hardens (staleness vs. model name).
 - Which of the three readouts leads the tool's headline result.

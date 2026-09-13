@@ -1,12 +1,16 @@
-# ADR-003: Stateless MCP control-plane contract for sk-mcp
+# ADR-SKM-0009: Stateless MCP control-plane contract for sk-mcp
 
 **Status:** Accepted (2026-06-08)
 **Date:** 2026-06-07
 
-> **Note on file path:** This file remains at `docs/ADRs/proposed/ADR-003-stateless-mcp-contract.md`
-> and will not be moved. Several documents across this repo and a private sibling repo link to
-> this exact path; moving it would break those references. The Status field above is authoritative
-> for the acceptance state of this ADR.
+> **Note on file path (superseded 2026-07-18):** This file previously stated it would
+> remain at `docs/ADRs/proposed/ADR-003-stateless-mcp-contract.md` and not be moved,
+> because a private sibling repo links to that exact path. The ADR-namespace-unification
+> migration (docs/HANDOFF.md "Numbering note") moved it anyway, to
+> `docs/ADRs/proposed/ADR-SKM-0009-stateless-mcp-contract.md` — **the old path is now a
+> dangling link in any sibling repo that has not been updated.** The Status field above
+> remains authoritative for the acceptance state of this ADR; the old-path breakage is
+> tracked as migration residue in the reconciliation PR.
 
 ## Context
 
@@ -50,7 +54,7 @@ already owns llama-server process lifecycle via stateless `start/stop/swap/statu
    `classify_document`, `analyze_axis_alignment`.
 
 2. **Control plane vs. data plane.** The MCP surface is the **control plane**
-   (stateless). Bulk **data ingestion** (the `BulkEmbedder` of ADR-002) runs
+   (stateless). Bulk **data ingestion** (the `BulkEmbedder` of ADR-SKM-0008) runs
    *outside* MCP, directly against the model endpoint, but is governed by the
    same per-call model selection — "ingestion need not be MCP; the controls must."
 
@@ -74,9 +78,9 @@ already owns llama-server process lifecycle via stateless `start/stop/swap/statu
 ## Consequences
 
 - Calls are reproducible and self-contained — identical inputs + model selection
-  yield identical outputs regardless of call history. This pays off ADR-001
+  yield identical outputs regardless of call history. This pays off ADR-SKM-0007
   (canonical `model_name` per call → null reuse stops being a special case) and
-  ADR-002 (one adapter contract, per-call selection).
+  ADR-SKM-0008 (one adapter contract, per-call selection).
 - **Breaking tool-surface change:** `model_load`/`model_unload` are removed.
 - **UI behavioral change:** the Gradio UI must own its own embedding cache for
   reactive sliders, since the facade no longer caches.
@@ -86,8 +90,8 @@ already owns llama-server process lifecycle via stateless `start/stop/swap/statu
   per-call model args; convert/remove `StateManager`; delete `commands/model.py`;
   move UI caching client-side; update tests.
 
-**Cross-refs:** ADR-001 (`docs/ADRs/proposed/ADR-001-referential-axis-alignment.md`,
-null `model_name` guard); ADR-002 (`docs/ADRs/proposed/ADR-002-unified-embedding-adapter.md`,
+**Cross-refs:** ADR-SKM-0007 (`docs/ADRs/proposed/ADR-SKM-0007-referential-axis-alignment.md`,
+null `model_name` guard); ADR-SKM-0008 (`docs/ADRs/proposed/ADR-SKM-0008-unified-embedding-adapter.md`,
 unified adapter + BulkEmbedder); llauncher `docs/adrs/accepted/008-launcher-state-stateless-facade.md`;
 prompt-prix / frontier-advisor `ARCHITECTURE.md`; `state_manager.py`;
 `commands/model.py`; `server.py`.
@@ -108,8 +112,8 @@ prompt-prix / frontier-advisor `ARCHITECTURE.md`; `state_manager.py`;
 Every tool call carries two selection parameters:
 
 - **`model_name`** — canonical model identity, the same string llauncher uses
-  (ADR-002 Decision 2), e.g. `embeddinggemma-300M-F32`. This is the string on
-  which ADR-001's null cache keys. It is not a backend label; it is the model's
+  (ADR-SKM-0008 Decision 2), e.g. `embeddinggemma-300M-F32`. This is the string on
+  which ADR-SKM-0007's null cache keys. It is not a backend label; it is the model's
   identity independent of transport.
 - **`base_url`** (or equivalent host+port) — coordinates of an already-running
   endpoint. sk-mcp targets a live server (Decision 3 of this ADR) and does not
@@ -123,7 +127,7 @@ these env vars.
 The vocabulary is **routed-by-name in llauncher's terms plus an explicit
 endpoint** — not a backend enum baked into the call identity. For the
 llama-server-first phase (current), the adapter is the unified OpenAI-compatible
-one (ADR-002 Decision 1), so transport is implied by `base_url`; no separate
+one (ADR-SKM-0008 Decision 1), so transport is implied by `base_url`; no separate
 `backend` field is part of the per-call identity. When the nv_embed path lands
 via llauncher (#155), transport metadata rides beside `model_name` as adapter
 construction detail, never as part of the call identity that flows through the
@@ -147,7 +151,7 @@ After the cutover, `get_adapter(model_name, base_url)` and
 `get_embed_fn(model_name, base_url)` take explicit per-call arguments with env
 fallback, construct an adapter, return it or a callable derived from it, and
 retain nothing across calls. The class becomes a single seam where per-call
-resolution, env-fallback, ADR-002's normalization contract (Decision 4), and
+resolution, env-fallback, ADR-SKM-0008's normalization contract (Decision 4), and
 `model_name` canonicalization (Decision 2) all live.
 
 Rationale for Option A over Option B (full removal, replacing `StateManager`
