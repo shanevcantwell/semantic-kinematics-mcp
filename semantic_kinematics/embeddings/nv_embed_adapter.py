@@ -26,12 +26,68 @@ dynamically-loaded NVEmbedModel) inherits it via normal attribute lookup.
 """
 
 import os
+from contextlib import contextmanager
+import threading
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
 from semantic_kinematics.embeddings.base import EmbeddingAdapter
+
+# --- transformers 5.x compatibility guard (sk-mcp#55) ---
+# transformers>=5.x calls self.all_tied_weights_keys.keys() inside
+# _finalize_model_loading which runs during from_pretrained. NV-Embed-v2's custom
+# model only defines _tied_weights_keys, so we patch the method to guard against
+# missing attribute. Patch is active only during load, then restored.
+
+_tied_weights_patch_lock = threading.RLock()
+_tied_weights_patch_depth = 0
+_original_move_missing = None
+
+
+@contextmanager
+def _all_tied_weights_guard():
+    """Temporarily guard the transformers 5.x tied-weights loader.
+
+    The class-level monkey patch is serialized for its entire lifetime. The
+    reentrant lock and depth counter make nested loads share one wrapper and
+    restore the original method only when the outermost load finishes.
+    """
+    global _original_move_missing, _tied_weights_patch_depth
+    from transformers.modeling_utils import PreTrainedModel
+
+    with _tied_weights_patch_lock:
+        original = getattr(
+            PreTrainedModel, "_move_missing_keys_from_meta_to_device", None
+        )
+        if original is None:
+            yield
+            return
+
+        if _tied_weights_patch_depth == 0:
+            _original_move_missing = original
+
+            def guarded_move(self, *args, **kwargs):
+                if not hasattr(self, "all_tied_weights_keys"):
+                    tied = getattr(self, "_tied_weights_keys", [])
+                    self.all_tied_weights_keys = {
+                        key: [] for key in (tied if isinstance(tied, list) else [])
+                    }
+                return original(self, *args, **kwargs)
+
+            PreTrainedModel._move_missing_keys_from_meta_to_device = guarded_move
+
+        _tied_weights_patch_depth += 1
+        try:
+            yield
+        finally:
+            _tied_weights_patch_depth -= 1
+            if _tied_weights_patch_depth == 0:
+                PreTrainedModel._move_missing_keys_from_meta_to_device = (
+                    _original_move_missing
+                )
+                _original_move_missing = None
 
 
 def _ensure_all_tied_weights_keys_default():
@@ -222,12 +278,18 @@ class NVEmbedAdapter(EmbeddingAdapter):
 
             dtype = torch.float16 if self._use_fp16 else torch.float32
 
-            self._model = AutoModel.from_pretrained(
-                self._model_path,
-                trust_remote_code=True,
-                torch_dtype=dtype,
-                low_cpu_mem_usage=True,
-            )
+            # Patch missing all_tied_weights_keys for transformers>=5.x (sk-mcp#55).
+            # Must inject BEFORE from_pretrained because _finalize_model_loading
+            # accesses self.all_tied_weights_keys inside the call. We monkey-patch
+            # PreTrainedModel._move_missing_keys_from_meta_to_device to guard against
+            # missing attribute, then restore after load.
+            with _all_tied_weights_guard():
+                self._model = AutoModel.from_pretrained(
+                    self._model_path,
+                    trust_remote_code=True,
+                    torch_dtype=dtype,
+                    low_cpu_mem_usage=True,
+                )
 
             # Force fp16 on ALL parameters and buffers - custom code may ignore torch_dtype
             if self._use_fp16:
@@ -254,7 +316,9 @@ class NVEmbedAdapter(EmbeddingAdapter):
         if self._model is not None:
             del self._model
             self._model = None
-            torch.cuda.empty_cache()
+        # Also flush allocations whose final local reference was released after
+        # an automatic unload (for example, when embed() returned).
+        torch.cuda.empty_cache()
 
     def _load_tokenizer(self):
         """Load only the tokenizer (cheap -- no model weights).
@@ -295,6 +359,14 @@ class NVEmbedAdapter(EmbeddingAdapter):
         """
         return len(self._load_tokenizer().encode(text))
 
+    def _embed_loaded(self, text: str) -> np.ndarray:
+        """Embed one text while keeping GPU references in this helper frame."""
+        model, _ = self._load_model()
+        # model.encode() is @torch.no_grad() internally
+        embeddings = model.encode([text], max_length=self._max_length)
+        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+        return embeddings[0].cpu().float().numpy()
+
     def embed(self, text: str) -> np.ndarray:
         """
         Generate embedding for text.
@@ -308,16 +380,26 @@ class NVEmbedAdapter(EmbeddingAdapter):
         Returns:
             Normalized embedding vector (4096 dims)
         """
-        model, _ = self._load_model()
-
         try:
-            # model.encode() is @torch.no_grad() internally
-            embeddings = model.encode([text], max_length=self._max_length)
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-            return embeddings[0].cpu().float().numpy()
+            return self._embed_loaded(text)
         finally:
             if self._unload_after_use:
+                # _embed_loaded's frame (and its model/GPU tensor references) is
+                # gone before unload flushes the CUDA allocator cache.
                 self.unload()
+
+    def _embed_batch_loaded(self, texts: List[str], chunk_size: int) -> np.ndarray:
+        """Embed a batch while keeping GPU references in this helper frame."""
+        model, _ = self._load_model()
+        all_embeddings = []
+
+        for i in range(0, len(texts), chunk_size):
+            chunk = texts[i:i + chunk_size]
+            embeddings = model.encode(chunk, max_length=self._max_length)
+            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+            all_embeddings.append(embeddings.cpu().float().numpy())
+
+        return np.concatenate(all_embeddings, axis=0)
 
     def embed_batch(self, texts: List[str], chunk_size: int = 8) -> np.ndarray:
         """
@@ -336,18 +418,10 @@ class NVEmbedAdapter(EmbeddingAdapter):
         if not texts:
             return np.array([])
 
-        model, _ = self._load_model()
-
         try:
-            all_embeddings = []
-
-            for i in range(0, len(texts), chunk_size):
-                chunk = texts[i:i + chunk_size]
-                embeddings = model.encode(chunk, max_length=self._max_length)
-                embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-                all_embeddings.append(embeddings.cpu().float().numpy())
-
-            return np.concatenate(all_embeddings, axis=0)
+            return self._embed_batch_loaded(texts, chunk_size)
         finally:
             if self._unload_after_use:
+                # The helper frame releases every model/GPU tensor reference
+                # before unload flushes the CUDA allocator cache.
                 self.unload()

@@ -1,3 +1,6 @@
+# Parked detritus (former tool sidecars, moved out of the working tree)
+.graveyard/
+
 # Python
 __pycache__/
 *.pyc
