@@ -9,14 +9,14 @@ uses the standard loose-ends format; graduation or retirement is noted inline wh
 ## 2026-06-24 — Affect-geometry / bearing track paused pending nv-embed-v2 promotion
 
 **Category:** provisional
-**Related ADR:** ADR-SKMCP-0004
+**Related ADR:** ADR-SKM-0004
 
 **Graduation trigger:** nv-embed-v2 served via llauncher (#155) → unpause; run cross-embedder
 Spike A; the *finding* graduates per the ADR's open question, this pause just retires.
 
 ### Context
 Session close, slammed. The bearing/affect-gate track is suspended on the conclusion that
-current-embedder results are embedder-captive (see ADR-SKMCP-0004). Suspended, **not killed** —
+current-embedder results are embedder-captive (see ADR-SKM-0004). Suspended, **not killed** —
 good data kept, nothing discarded.
 
 ### Decision

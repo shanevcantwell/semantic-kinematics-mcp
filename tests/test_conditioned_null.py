@@ -1,4 +1,4 @@
-"""Tests for the context-conditioned phrase-displacement null (ADR-SKMCP-0003).
+"""Tests for the context-conditioned phrase-displacement null (ADR-SKM-0003).
 
 All fixture-based: NO network, NO real-vault load, NO embedder. The conditioned
 null is built by hand from known stratum statistics so loader hard-fails,

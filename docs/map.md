@@ -13,7 +13,7 @@ filter the whole program prunes by:
 
 That filter is why these have a chance at *legitimacy*, and why the absolute/semantic
 measurements (`deadpan_score`/`heller_score`/jolt-magnitude) were falsified — see
-[ADR-SKMCP-0005](./ADRs/proposed/ADR-SKMCP-0005-absolute-affect-falsified-on-embeddinggemma.md).
+[ADR-SKM-0005](./ADRs/proposed/ADR-SKM-0005-absolute-affect-falsified-on-embeddinggemma.md).
 A mathematical measure has a null, a noise floor, and a claim that can be *wrong in a
 checkable way*. A semantic (LLM-judge) measure costs a forward pass, doesn't reproduce, and
 inherits the judge's completion/escalation bias — the exact mechanism that confabulated the
@@ -71,7 +71,7 @@ falsified scores.
   operator's own single stream (self-baseline, no consent question) before the scaled version
   is relevant.
 - **Relations:** same instrument, new timescale. New *longitudinal-atom* question
-  (user-rep-at-time-t = session-summary embedding? rolling window?) — ADR-SKMCP-0003's
+  (user-rep-at-time-t = session-summary embedding? rolling window?) — ADR-SKM-0003's
   conditioning problem one level up.
 - **Status:** unexplored; single-stream POC available on the tvi corpus.
 

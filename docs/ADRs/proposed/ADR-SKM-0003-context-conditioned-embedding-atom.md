@@ -2,7 +2,7 @@
 
 **Status**: `proposed`
 **Date**: 2026-06-16
-**Related**: ADR-SKMCP-0001 (directional projection primitive — this ADR supplies a second, independent motivation for it)
+**Related**: ADR-SKM-0001 (directional projection primitive — this ADR supplies a second, independent motivation for it)
 **Scope**: semantic-kinematics-mcp (sk-mcp)
 
 ---
@@ -39,7 +39,7 @@ Adopt a **context-conditioned embedding atom** for jolt/register detection:
 
 **Why conditioning is mandatory.** The jolt is the target read after its setup; context-free embedding at any granularity removes the contrast, so the only thing left to measure is topic/lexical change — which is what the flat/scene-shift readings already are. Conditioning is the precondition for the jolt being present in the data at all.
 
-**Why this favors bearing over magnitude — on geometric grounds, not empirical luck.** If adjacent target vectors are embedded with overlapping left-context, consecutive vectors *share input* and are therefore artificially close, which **smooths the second difference** (acceleration). The very construction that makes the jolt encodable suppresses the jolt's magnitude signature. Projection onto a situatedness axis reads the target vector's **absolute location** (did it land in deadpan-over-catastrophe territory) and is immune to how much its neighbor's window overlapped. So adding the setup is mandatory to see the jolt and simultaneously kills the magnitude read while sparing the projection. This is a second, independent motivation for the ADR-SKMCP-0001 directional-projection primitive, arriving from the embedding side rather than from anisotropy.
+**Why this favors bearing over magnitude — on geometric grounds, not empirical luck.** If adjacent target vectors are embedded with overlapping left-context, consecutive vectors *share input* and are therefore artificially close, which **smooths the second difference** (acceleration). The very construction that makes the jolt encodable suppresses the jolt's magnitude signature. Projection onto a situatedness axis reads the target vector's **absolute location** (did it land in deadpan-over-catastrophe territory) and is immune to how much its neighbor's window overlapped. So adding the setup is mandatory to see the jolt and simultaneously kills the magnitude read while sparing the projection. This is a second, independent motivation for the ADR-SKM-0001 directional-projection primitive, arriving from the embedding side rather than from anisotropy.
 
 **Why the null is length/`k`-stratified.** Short pooled segments retain more idiosyncratic, off-cone direction variance than long ones, which have averaged back toward the cone center; unit-norming removes length-as-magnitude but not length-as-direction-variance. Punchlines are short, so raw phrase acceleration will spike on them for a length reason that mimics the comedic reason — and would feel like confirmation. The context-ramp adds a second entanglement: longer windows (larger `k`) are more cone-centered, so `k` and pooling variance are confounded. Both must be absorbed by the null before any number is read.
 
@@ -47,7 +47,7 @@ Adopt a **context-conditioned embedding atom** for jolt/register detection:
 - The jolt becomes encodable at all; context-free atoms never could.
 - One preprocessing substrate feeds both the magnitude run (#25 item 1) and the bearing primitive (#25 item 4).
 - The context-ramp is a real instrument: it measures setup length rather than guessing it.
-- Strengthens ADR-SKMCP-0001 with a motivation independent of the anisotropy argument.
+- Strengthens ADR-SKM-0001 with a motivation independent of the anisotropy argument.
 
 ### Negative consequences
 - **Breaks the magnitude channel for this task** via overlap-smoothing. Accepted, because bearing is the target — but it means magnitude cannot serve as the validation here.
@@ -74,7 +74,7 @@ Adopt a **context-conditioned embedding atom** for jolt/register detection:
 - [x] **Is embeddinggemma (:8082, 768d) bidirectional, and what is its pooling — mean vs. last-token/end-weighted?** **RESOLVED 2026-06-16 (measured against live :8082, embeddinggemma-300M-F32, n_ctx 2048):** (a) Default pooling is **mean** (`--embeddings`, no `--pooling`); the OpenAI-compat `/v1/embeddings` path always returns one pooled vector. (b) **Per-token output is available** by launching with `--pooling none`; the native `/embeddings` endpoint then returns `(n_tokens, 768)` (confirmed `(7,768)` for a 7-token input). Per-request `pooling` override is ignored — it is a launch flag. (c) The model is **bidirectional**: appending tokens shifts earlier shared-prefix token reps (`"the"` cos 0.79 between `"the cat"` and `"the cat sat on the mat"`; causal would be 1.000). **Branch picked:** feed `[setup + target]` as one window, pool the target span client-side off `/embeddings` under `--pooling none`. **Caveat (off-distribution):** embeddinggemma is calibrated for mean-pool over the *whole* prompted input (with task prefixes); the per-token reps are properly contextualized, but pooling a target *sub-span* is not how the sentence representation was trained — raises the prior that the per-`k` length-stratified null absorbs more apparent signal than expected. **Because the ramp window is jointly (not causally) encoded, `k` measures joint-window size, not strictly "how far back."**
 - [ ] **What is the critical `k` (setup length) for the Vogon specimen, and is it constant or contrast-dependent?** **Resolution:** Context-ramp experiment, #25 item 1.
 - [ ] **Does the overlap-smooths-acceleration prediction hold empirically — magnitude degrading as left-context overlap grows while projection is preserved?** **Resolution:** Measure both channels across the ramp; this is the decisive bearing-over-magnitude test from the embedding side.
-- [ ] **Does the per-`k`, length-stratified null behave as expected (longer windows → more cone-centered)?** **Resolution:** Compute and inspect the null before any kinematic read; ties to the ADR-SKMCP-0001 primitive build (#25 item 4).
+- [ ] **Does the per-`k`, length-stratified null behave as expected (longer windows → more cone-centered)?** **Resolution:** Compute and inspect the null before any kinematic read; ties to the ADR-SKM-0001 primitive build (#25 item 4).
 - [ ] **Do demarcator-type changes (period/dash/ellipsis/bang) produce spurious spikes?** **Resolution:** Confirm spikes do not track punctuation-type transitions when validating the phrase atom.
 
 **Discipline:** the token-wise/phrase-wise run must be built to **falsify** "a [token|phrase]-scale jolt exists," not to hunt for one. If the punchlines stay flat even isolated at their own scale, length-corrected and context-conditioned, that is the cleanest case yet for bearing-not-magnitude and aims the run straight at the situatedness anchor that does not yet exist.
@@ -95,14 +95,14 @@ The verdict only means something if its terms are fixed **before any embedding**
 - Punchlines 72 (`'With a torch.'`) and 74 (`'So had the stairs.'`) never clear σ=3 at any k. Equal-format controls and the scene-shift-narration controls also stay within ~1σ. **Bound (confound 2): magnitude cannot separate comedic from scene/ordinary discontinuity *at equal formatting* — NOT "no signal."**
 - The conditioned construction is sound (live-validated span localization; per-`k` null cancels the smoothing artifact; raw deadpan 0.69→0.69 *declined* with `k`, the confound-1 artifact, diagnostic-only — not a detection). So the negative is about the **channel**, not the instrument.
 - **Sub-finding (suggestive, not significant):** punchline 72's z rises monotonically with `k` (−1.66 → +0.82, ~2.5σ in the *predicted* direction as setup enters the window), but stays sub-threshold; 74 shows no such trend. Hints the conditional contrast exists as *direction-of-motion*, not excess *magnitude*.
-- **Consequence:** the cleanest case yet for **bearing-not-magnitude**. The deadpan jolt is not a displacement-magnitude phenomenon at this atom/embedder even when conditioned → aims at the **projection / situatedness** track (ADR-SKMCP-0001), whose anchor does not yet exist. The NV-Embed/4096-d "deadpan 0.72" founding belief remains falsified-as-measured.
+- **Consequence:** the cleanest case yet for **bearing-not-magnitude**. The deadpan jolt is not a displacement-magnitude phenomenon at this atom/embedder even when conditioned → aims at the **projection / situatedness** track (ADR-SKM-0001), whose anchor does not yet exist. The NV-Embed/4096-d "deadpan 0.72" founding belief remains falsified-as-measured.
 
 This resolves OQ "does the per-`k` null behave as expected" (yes — monotonic cone-centering, per-k overlap 0→140 chars) and largely answers "overlap-smooths-magnitude" (raw deadpan declines with `k`; the null absorbs it). The setup-length / critical-`k` OQ is moot for magnitude (no clearance to locate a `k*`).
 
 ## Supersession Relationships
 
 **Supersedes:** none.
-**Reinforces:** ADR-SKMCP-0001 (adds the embedding-overlap motivation for directional projection, independent of anisotropy). ADR-SKMCP-0001 should add a back-reference noting this second motivation.
+**Reinforces:** ADR-SKM-0001 (adds the embedding-overlap motivation for directional projection, independent of anisotropy). ADR-SKM-0001 should add a back-reference noting this second motivation.
 **Superseded by:** TBD (a confirmed situatedness-anchor construction may absorb this once the projection primitive is built).
 
 ## Implementation Notes
@@ -120,5 +120,5 @@ This resolves OQ "does the per-`k` null behave as expected" (yes — monotonic c
 
 - Provenance of the narrated jolt: qwen3.5-9b gist — https://gist.github.com/shanevcantwell/6c0344db773e11fce23591967f2e4572 (narrated a jolt; relabeled `drift` as `acceleration`; never ran the second derivative).
 - §8 rev 2026-06-15 (Stage-1 jolt smoke + seam; nomic fossil; vault confirmed).
-- ADR-SKMCP-0001 (directional projection primitive).
+- ADR-SKM-0001 (directional projection primitive).
 - Issue #25 (fresh-stab roadmap), #14 (nomic silent-default hard-fail), #28 (vault embed prereq), PR #26.

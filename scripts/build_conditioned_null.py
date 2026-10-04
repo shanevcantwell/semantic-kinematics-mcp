@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build the MEASURED context-conditioned phrase-displacement null (ADR-SKMCP-0003).
+"""Build the MEASURED context-conditioned phrase-displacement null (ADR-SKM-0003).
 
 The null is the empirical distribution of WITHIN-TURN consecutive conditioned-
 phrase displacement magnitudes ``||cv[i+1] - cv[i]||`` over real vault text,

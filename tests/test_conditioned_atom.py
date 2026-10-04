@@ -1,4 +1,4 @@
-"""Unit tests for the context-conditioned embedding atom (ADR-SKMCP-0003, Phase 2).
+"""Unit tests for the context-conditioned embedding atom (ADR-SKM-0003, Phase 2).
 
 No network: a deterministic ``FakeAdapter`` mimics the live llama.cpp
 ``--pooling none`` contract — ``tokenize_pieces`` returns leading-space-grouped

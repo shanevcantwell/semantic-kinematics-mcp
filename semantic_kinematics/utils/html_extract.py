@@ -2,7 +2,7 @@
 HTML extraction utilities.
 
 Consolidates HTML→text extraction from a1, b2 scripts with
-provenance preservation per ADR-001.
+provenance preservation per ADR-SKM-0007.
 """
 
 from typing import Optional, Tuple
@@ -60,7 +60,7 @@ def extract_with_provenance(
     """
     Extract text with provenance metadata.
 
-    Per ADR-001, preserves both extracted text and source HTML
+    Per ADR-SKM-0007, preserves both extracted text and source HTML
     for verification.
 
     Args:
@@ -122,7 +122,7 @@ def build_message_with_provenance(
         preserve_html: Whether to store text_html field
 
     Returns:
-        Message dict per ADR-001 schema
+        Message dict per ADR-SKM-0007 schema
     """
     if html_content:
         text, extraction_meta = extract_with_provenance(html_content, source_field)
