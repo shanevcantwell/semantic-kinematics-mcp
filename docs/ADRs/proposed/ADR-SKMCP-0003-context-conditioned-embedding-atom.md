@@ -112,7 +112,7 @@ This resolves OQ "does the per-`k` null behave as expected" (yes — monotonic c
 | `src/.../trajectory_analyzer.py` | Existing seam | `analyze_embeddings(matrix)` / `analyze_segments(list)` (PR #26, `a2ee10e`) — context-conditioned phrase-pooled vectors plug in here as `matrix`. |
 | `scripts/smoke_jolt.py` | Motivating fixture | NOT the instrument; the Stage-1 smoke that produced the flat/scene-shift readings. |
 | semantic-chunker preprocessing | New | Punctuation-based phrase segmentation with trailing demarcator; context-ramp window construction. Note: the 2-exchange chunker win windowed *up* (more context per unit); phrase atoms window *down*, so that win is a warning here, not precedent. |
-| `output/vectors/chunks.jsonl`, `embed_checkpoint.jsonl` | Existing vault | 80,520 per-turn, embeddinggemma 768d, unit-norm. Re-embedding at phrase granularity with conditioning is a vault-cost this ADR's atom change implies. |
+| Verified TVI canonical DB/query + `embed_checkpoint.jsonl` | Existing vault boundaries | The verified canonical query is the operational text/`chunk_id` authority. The checkpoint is vector state only and is usable with authoritative model/source sidecars (or the explicitly pinned historical smoke exception); legacy `chunks.jsonl` is superseded as an operational surface and remains parity-oracle evidence only. Re-embedding at phrase granularity with conditioning is a vault-cost this ADR's atom change implies. |
 
 **Specimens:** escalation `e7c2fe94…`; Vogon `0029_Absurdist_LLM_ideas`.
 

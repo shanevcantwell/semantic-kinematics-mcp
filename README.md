@@ -71,10 +71,10 @@ Path resolution is environment-driven (no hardcoded home directories — issue #
 | Variable | Used by | Default |
 |----------|---------|---------|
 | `NV_EMBED_MODEL_PATH` | both in-process backends (`nv_embed` + `sentence_transformers`) | `nvidia/NV-Embed-v2` (HuggingFace hub id; set to a local checkout to skip download) |
-| `THOUGHT_VAULT_CANONICAL_DB` | measured-null builders | `/srv/dev/shanevcantwell/thought-vault-integration/output/canonical/corpus.db` |
-| `THOUGHT_VAULT_CANONICAL_ROOT` | measured-null builders (optional trusted root for direct-generation paths) | unset |
+| `THOUGHT_VAULT_CANONICAL_DB` | measured-null builders, `smoke_jolt`, corpus summary | `/srv/dev/shanevcantwell/thought-vault-integration/output/canonical/corpus.db` |
+| `THOUGHT_VAULT_CANONICAL_ROOT` | canonical TVI consumers (optional trusted root for direct-generation paths) | unset |
 | `TVI_CANONICAL_CORPUS_EXECUTABLE` | canonical TVI consumers | `tvi-canonical-corpus` |
-| `THOUGHT_VAULT_VECTORS_DIR` | vector-bound `smoke_jolt` only | `/srv/dev/shanevcantwell/thought-vault-integration/output/vectors` |
+| `THOUGHT_VAULT_VECTORS_DIR` | `smoke_jolt` checkpoint-vector boundary only | `/srv/dev/shanevcantwell/thought-vault-integration/output/vectors` |
 
 ## MCP Tools
 
@@ -153,6 +153,8 @@ For a full thought-vault corpus, **`scripts/embed_full_corpus.sh`** is the canon
 - **Generic JSONL input:** one object per line; `--text-field` / `--id-field` name the text and id keys (blank-text lines are skipped; missing ids default to `line-N`). This mode remains the contract for Nemotron and other newly prepared contrast corpora.
 - **Vector boundary:** the `--checkpoint` JSONL remains model-keyed derived state: one `{chunk_id, embedding}` record per item. `<checkpoint>.meta.json` records the producing model (`model_name` + `dimensions`), and a model mismatch fails loud (#16). Corpus generation/query identity is deliberately separate in atomic `<checkpoint>.source.json`; resume refuses a changed canonical generation/query (or changed generic file hash) without putting source metadata into each vector record.
 - **Where it sits:** `BulkEmbedder` is a *data-plane* job on the shared adapter substrate — it never crosses the MCP contract boundary. Its output vectors feed downstream analysis, e.g. building the axis-alignment background null. The sibling **thought-vault-integration** repo owns ingestion and promotion of text/IDs into its canonical DB; sk-mcp reads them through the installed query CLI. See [ARCHITECTURE.md → Data pipeline](docs/ARCHITECTURE.md#data-pipeline-bulk-embedding).
+
+`scripts/smoke_jolt.py` is **canonical text plus checkpoint vectors**: specimen-B conversation IDs, speakers, order metadata, and text come from an explicit verified canonical query (`input_key=base`, target conversation across acquisitions, user/assistant only), while vectors come from a provenance-gated checkpoint. Normal operation requires matching `.source.json` plus `.meta.json` sidecars. The historical sidecar-less specimen-B checkpoint is accepted only by a pinned checkpoint SHA-256, canonical generation/scoped-query fingerprint, and exact text/ID sequence parity; its producing model is explicitly non-authoritative, so it is available only through `python scripts/smoke_jolt.py --specimen-b-only` and cannot support the default cross-specimen/shared-space verdict. The default two-specimen run requires both authoritative checkpoint model identity matching specimen A and the live embeddinggemma endpoint. `scripts/summarize_corpus.py` likewise obtains TVI totals/IDs and generation/query provenance canonically while scanning checkpoint snapshots only for vector validity and source-ID coverage. Both fail closed on verified-open/query errors and never treat checkpoint JSONL as text authority.
 
 Host-local release evidence for the DB cutover is opt-in because it depends on a promoted real generation:
 

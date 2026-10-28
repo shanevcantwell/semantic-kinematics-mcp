@@ -15,7 +15,12 @@ from pathlib import Path
 import pytest
 
 # Modules touched by the #34 fix and the source files behind them.
-from scripts import build_conditioned_null, build_displacement_null, smoke_jolt
+from scripts import (
+    build_conditioned_null,
+    build_displacement_null,
+    smoke_jolt,
+    summarize_corpus,
+)
 from semantic_kinematics.embeddings import sentence_transformers_adapter
 
 _TOUCHED_MODULES = [
@@ -23,6 +28,7 @@ _TOUCHED_MODULES = [
     build_displacement_null,
     build_conditioned_null,
     smoke_jolt,
+    summarize_corpus,
 ]
 
 VAULT_ENV = "THOUGHT_VAULT_VECTORS_DIR"
@@ -80,15 +86,50 @@ def test_null_builder_canonical_db_env_override(monkeypatch, module):
         importlib.reload(module)
 
 
-def test_smoke_jolt_vault_path_env_override(monkeypatch):
-    """The still-vector-bound smoke tool retains its vectors-dir override."""
+def test_smoke_jolt_canonical_text_and_vector_env_overrides(monkeypatch):
+    """Smoke text uses canonical DB; only its embedding half uses vectors dir."""
+    monkeypatch.setenv(CANONICAL_DB_ENV, "/srv/data/vault/canonical/corpus.db")
     monkeypatch.setenv(VAULT_ENV, "/srv/data/vault/vectors")
     importlib.reload(smoke_jolt)
     try:
-        assert smoke_jolt.VAULT_DIR == "/srv/data/vault/vectors"
+        assert smoke_jolt.DEFAULT_CORPUS_DB == "/srv/data/vault/canonical/corpus.db"
+        assert smoke_jolt.VECTORS_DIR == "/srv/data/vault/vectors"
+        assert smoke_jolt.CHECKPOINT_PATH == ("/srv/data/vault/vectors/embed_checkpoint.jsonl")
+        assert not hasattr(smoke_jolt, "CHUNKS_PATH")
     finally:
+        monkeypatch.delenv(CANONICAL_DB_ENV, raising=False)
         monkeypatch.delenv(VAULT_ENV, raising=False)
         importlib.reload(smoke_jolt)
+
+
+def test_smoke_jolt_source_enforces_canonical_text_access():
+    source = Path(smoke_jolt.__file__).read_text(encoding="utf-8")
+
+    assert "open_canonical_chunks(" in source
+    assert "all_acquisitions_conversation_ids=" in source
+    assert "SPECIMEN_B_INPUT_KEYS" in source
+    assert 'os.path.join(VECTORS_DIR, "embed_checkpoint.jsonl")' in source
+    assert '"chunks.jsonl"' not in source
+
+
+def test_summarize_production_stores_are_canonical_text_sources():
+    assert summarize_corpus.STORES
+    for store in summarize_corpus.STORES:
+        assert store.corpus_db
+        assert store.corpus is None
+        assert store.input_keys == ("base",)
+        assert "chunks.jsonl" not in repr(store)
+        assert store.checkpoint.endswith(".jsonl")
+
+    # Gate 4 migrates text/ID authority only; model-keyed vector locations stay put.
+    checkpoints = {store.name: store.checkpoint for store in summarize_corpus.STORES}
+    assert checkpoints == {
+        "embgemma-300m-768": ("../thought-vault-integration/output/vectors/embed_checkpoint.jsonl"),
+        "nvembed-v2-4096": (
+            "../thought-vault-integration/output/thought-vault-integration-data/"
+            "nv4096/corpus_4096.jsonl"
+        ),
+    }
 
 
 def test_embed_wrapper_defaults_to_canonical_db_not_legacy_chunks_jsonl():
@@ -101,12 +142,16 @@ def test_embed_wrapper_defaults_to_canonical_db_not_legacy_chunks_jsonl():
     assert 'CORPUS="${CORPUS:-' not in source  # generic mode must be explicit
 
 
-def test_vault_path_default_rooted_outside_home():
-    """Default TVI paths are rooted at /srv, not a user home directory."""
+def test_vault_path_default_rooted_outside_home(monkeypatch):
+    """Built-in TVI defaults are /srv paths even when the test run has overrides."""
+    monkeypatch.delenv(CANONICAL_DB_ENV, raising=False)
+    monkeypatch.delenv(VAULT_ENV, raising=False)
     for module, attr in [
         (build_displacement_null, "DEFAULT_CORPUS_DB"),
         (build_conditioned_null, "DEFAULT_CORPUS_DB"),
-        (smoke_jolt, "VAULT_DIR"),
+        (smoke_jolt, "DEFAULT_CORPUS_DB"),
+        (smoke_jolt, "VECTORS_DIR"),
+        (summarize_corpus, "DEFAULT_CORPUS_DB"),
     ]:
         importlib.reload(module)
         value = getattr(module, attr)

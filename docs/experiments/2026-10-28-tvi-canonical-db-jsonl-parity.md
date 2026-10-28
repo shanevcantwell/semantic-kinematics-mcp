@@ -40,11 +40,15 @@ PASS only if every ordered comparison is exact. No set-only comparison, sorting,
 Command (from the sk-mcp worktree):
 
 ```bash
-SK_RUN_REAL_TVI_PARITY=1 .venv/bin/python -m pytest -s -m real_generation \
-    tests/test_real_tvi_generation_parity.py
+env \
+  SK_RUN_REAL_TVI_PARITY=1 \
+  TVI_CANONICAL_CORPUS_EXECUTABLE=/tmp/tvi-main-cli-smoke-venv/bin/tvi-canonical-corpus \
+  THOUGHT_VAULT_CANONICAL_DB=/home/node/worktrees/tvi-canonical-query-door/output/canonical/corpus.db \
+  THOUGHT_VAULT_CANONICAL_ROOT=/home/node/worktrees/tvi-canonical-query-door/output/canonical \
+  python -m pytest -s -m real_generation tests/test_real_tvi_generation_parity.py
 ```
 
-Result: **3 passed in 47.09s**.
+Result after the Gate-4 smoke-jolt parity case was added: **4 passed in 42.89s**.
 
 Observed canonical generation:
 
@@ -60,11 +64,18 @@ Both null builders independently produced the same observations:
 - reservoir sample: `k=3000`, seed `1729`
 - sample sequence SHA-256 (length-framed UTF-8): `ffc09b2749796fdfb78b9e15aa8b3965e5686288ecefe5f033696bafb3e31258`
 
+The smoke-jolt specimen-B population also matched exactly:
+
+- selected user/assistant turns: `201`
+- ordered `(chunk_id, text)` sequence SHA-256: `9ccfe2e83268b858cb27a7298187c43ca606492bf9fda93f26ab06d0950f5f07`
+- scoped query fingerprint: `b872ea1b85fa8ce91882fdc7377e5ebf058c25514c0907ab26dda84d1d420c9f`
+
 Every comparison was ordered and exact:
 
 1. canonical and legacy usable-text sequences matched item-for-item;
-2. usable counts and fixed-seed samples matched exactly for both `build_displacement_null` and `build_conditioned_null`; and
-3. canonical and legacy `embed_corpus` inputs matched item-for-item as ordered `(chunk_id, text)` pairs.
+2. usable counts and fixed-seed samples matched exactly for both `build_displacement_null` and `build_conditioned_null`;
+3. canonical and legacy `smoke_jolt` specimen-B selection/order matched item-for-item; and
+4. canonical and legacy `embed_corpus` inputs matched item-for-item as ordered `(chunk_id, text)` pairs.
 
 The embedding-input test constructed no adapter and opened no vector checkpoint. No embedding or model-sidecar file was created, updated, or refreshed.
 
