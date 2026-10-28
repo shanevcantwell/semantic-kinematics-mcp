@@ -8,7 +8,8 @@ the atom-matching discipline: turn-to-turn deltas are a different (larger) regim
 and must NOT be used to calibrate a sentence-atom detector.
 
 Pipeline:
-  1. Stream vault chunks.jsonl (read-only). Subsample turns with a fixed seed.
+  1. Stream verified canonical vault rows through the TVI query CLI, scoped to
+     ``input_key=base`` by default. Subsample turns with a fixed seed.
   2. For each sampled turn: spaCy sentence-split (same path as TrajectoryAnalyzer).
   3. Embed consecutive sentences on :8082 (768-d, unit-norm).
   4. Collect within-turn ||delta|| (never crossing a turn boundary).
@@ -29,6 +30,8 @@ import json
 import os
 import random
 import sys
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -36,17 +39,29 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from semantic_kinematics.mcp.commands.trajectory import TrajectoryAnalyzer  # noqa: E402
-from semantic_kinematics.mcp.state_manager import StateManager  # noqa: E402
-
-# Vault corpus location is environment-driven so the null build runs under any
-# user, not just the corpus author (issue #34). Override THOUGHT_VAULT_VECTORS_DIR
-# to point at a different thought-vault-integration output/vectors checkout.
-_VAULT_VECTORS_DIR = os.environ.get(
-    "THOUGHT_VAULT_VECTORS_DIR",
-    "/srv/dev/shanevcantwell/thought-vault-integration/output/vectors",
+from scripts.tvi_canonical_input import (
+    DEFAULT_EXECUTABLE,
+    CanonicalInputError,
+    CanonicalQueryProvenance,
+    open_canonical_chunks,
 )
-DEFAULT_SOURCE = os.path.join(_VAULT_VECTORS_DIR, "chunks.jsonl")
+from semantic_kinematics.mcp.commands.trajectory import TrajectoryAnalyzer
+from semantic_kinematics.mcp.state_manager import StateManager
+
+# The live thought-vault source is the promoted canonical database. The
+# environment override keeps deployment-specific locations out of the CLI while
+# retaining a usable default for the established /srv layout (issue #34).
+DEFAULT_CORPUS_DB = os.environ.get(
+    "THOUGHT_VAULT_CANONICAL_DB",
+    "/srv/dev/shanevcantwell/thought-vault-integration/output/canonical/corpus.db",
+)
+DEFAULT_CANONICAL_ROOT = os.environ.get("THOUGHT_VAULT_CANONICAL_ROOT")
+DEFAULT_TVI_EXECUTABLE = os.environ.get(
+    "TVI_CANONICAL_CORPUS_EXECUTABLE", DEFAULT_EXECUTABLE
+)
+DEFAULT_INPUT_KEYS = ("base",)
+CONSUMER_NAME = "semantic-kinematics.build_displacement_null"
+CONSUMER_VERSION = "1.0"
 EMBED_BACKEND = "lmstudio"
 EMBED_BASE_URL = "http://localhost:8082/v1"
 EMBED_MODEL = "embeddinggemma-300M-F32"
@@ -63,40 +78,110 @@ def _build_analyzer() -> TrajectoryAnalyzer:
     return TrajectoryAnalyzer(manager)
 
 
-def _reservoir_sample_turns(path: str, k: int, seed: int):
-    """Reservoir-sample up to k usable turns from a streamed jsonl (read-only).
+def _iter_usable_texts(rows: Iterable[Mapping[str, Any]]) -> Iterator[str]:
+    """Yield the old null-builder population from rows in source order."""
+    for row in rows:
+        text = (row.get("text") or "").strip()
+        if len(text) >= MIN_TURN_CHARS:
+            yield text
 
-    A 'usable' turn has >= MIN_TURN_CHARS of text. Reservoir sampling gives a
-    uniform sample over the stream in a single pass without loading the file.
-    """
+
+def _reservoir_sample_turns(
+    rows: Iterable[Mapping[str, Any]], k: int, seed: int
+) -> tuple[list[str], int]:
+    """Reservoir-sample usable turns in query-door order without buffering rows."""
     rng = random.Random(seed)
-    reservoir = []
+    reservoir: list[str] = []
     seen = 0
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            text = (rec.get("text") or "").strip()
-            if len(text) < MIN_TURN_CHARS:
-                continue
-            seen += 1
-            if len(reservoir) < k:
-                reservoir.append(text)
-            else:
-                j = rng.randint(0, seen - 1)
-                if j < k:
-                    reservoir[j] = text
+    for text in _iter_usable_texts(rows):
+        seen += 1
+        if len(reservoir) < k:
+            reservoir.append(text)
+        else:
+            j = rng.randint(0, seen - 1)
+            if j < k:
+                reservoir[j] = text
     return reservoir, seen
+
+
+def _normalize_input_keys(input_keys: Iterable[str]) -> tuple[str, ...]:
+    keys = tuple(sorted(input_keys))
+    if not keys:
+        raise ValueError("at least one --input-key is required")
+    if len(set(keys)) != len(keys):
+        raise ValueError("--input-key values must not contain duplicates")
+    return keys
+
+
+def _sample_canonical_turns(
+    corpus_db: str,
+    *,
+    canonical_root: str | None,
+    input_keys: tuple[str, ...],
+    k: int,
+    seed: int,
+    executable: str,
+) -> tuple[list[str], int, CanonicalQueryProvenance]:
+    """Sample one verified TVI traversal; acquisition failures propagate."""
+    with open_canonical_chunks(
+        corpus_db,
+        canonical_root=canonical_root,
+        input_keys=input_keys,
+        executable=executable,
+    ) as stream:
+        provenance = stream.provenance
+        turns, seen = _reservoir_sample_turns(stream, k, seed)
+    return turns, seen, provenance
+
+
+def _corpus_provenance(
+    provenance: CanonicalQueryProvenance,
+    *,
+    input_keys: tuple[str, ...],
+    produced_at: str,
+) -> dict[str, Any]:
+    block = provenance.as_dict()
+    block.update(
+        {
+            "source_kind": "tvi_canonical_db",
+            "normalized_input_keys": list(input_keys),
+            "normalized_filters": {
+                "channels": [],
+                "speakers": [],
+                "conversations": [],
+                "nonblank_text": None,
+                "time_roles": [],
+            },
+            "consumer": {"name": CONSUMER_NAME, "version": CONSUMER_VERSION},
+            "produced_at": produced_at,
+        }
+    )
+    return block
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--source", default=DEFAULT_SOURCE, help="vault chunks.jsonl")
+    ap.add_argument(
+        "--corpus-db",
+        default=DEFAULT_CORPUS_DB,
+        help="promoted TVI canonical corpus.db (verified-open; no JSONL fallback)",
+    )
+    ap.add_argument(
+        "--canonical-root",
+        default=DEFAULT_CANONICAL_ROOT,
+        help="optional trusted TVI canonical root for direct generation paths",
+    )
+    ap.add_argument(
+        "--input-key",
+        action="append",
+        dest="input_keys",
+        help="canonical acquisition key (repeatable; default: base)",
+    )
+    ap.add_argument(
+        "--tvi-executable",
+        default=DEFAULT_TVI_EXECUTABLE,
+        help="installed tvi-canonical-corpus executable",
+    )
     ap.add_argument(
         "--target-sentences",
         type=int,
@@ -112,17 +197,31 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if not os.path.isfile(args.source):
-        print(f"FATAL: source not found: {args.source}", file=sys.stderr)
-        return 2
+    try:
+        input_keys = _normalize_input_keys(args.input_keys or DEFAULT_INPUT_KEYS)
+    except ValueError as exc:
+        ap.error(str(exc))
 
     # Heuristic: avg ~2 within-turn deltas per usable turn -> sample ~target/2
     # turns, then trim. We oversample turns slightly to land near the target.
     target_turns = max(1, args.target_sentences // 2)
 
-    print(f"Reservoir-sampling ~{target_turns} turns (seed={args.seed}) "
-          f"from {args.source} ...")
-    turns, total_usable = _reservoir_sample_turns(args.source, target_turns, args.seed)
+    print(
+        f"Reservoir-sampling ~{target_turns} turns (seed={args.seed}) "
+        f"from canonical DB {args.corpus_db} input_keys={list(input_keys)} ..."
+    )
+    try:
+        turns, total_usable, source_provenance = _sample_canonical_turns(
+            args.corpus_db,
+            canonical_root=args.canonical_root,
+            input_keys=input_keys,
+            k=target_turns,
+            seed=args.seed,
+            executable=args.tvi_executable,
+        )
+    except CanonicalInputError as exc:
+        print(f"FATAL: canonical corpus query failed: {exc}", file=sys.stderr)
+        return 2
     print(f"  sampled {len(turns)} turns out of {total_usable} usable in stream")
 
     analyzer = _build_analyzer()
@@ -144,7 +243,7 @@ def main() -> int:
         # rather than retrying or silently truncating (no in-engine retry rule).
         try:
             embs = np.vstack([analyzer.embed_sentences([s])[0] for s in sentences])
-        except Exception as exc:  # noqa: BLE001 - surface as an honest skip count
+        except Exception as exc:  # surface as an honest skip count
             if "too large to process" in str(exc):
                 n_turns_skipped_oversize += 1
                 continue
@@ -176,6 +275,7 @@ def main() -> int:
         "p99": float(np.percentile(mags, 99)),
     }
 
+    produced_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
     artifact = {
         "header": {
             "regime": "bearing-magnitude",
@@ -183,17 +283,22 @@ def main() -> int:
             "embedder": EMBED_MODEL,
             "dim": EXPECTED_DIM,
             "n_deltas": int(mags.size),
-            "n_turns_sampled": int(len(turns)),
+            "n_turns_sampled": len(turns),
             "n_turns_contributing": int(n_turns_contributing),
             "n_turns_skipped_oversize": int(n_turns_skipped_oversize),
             "n_sentences": int(n_sentences_total),
-            "source_path": args.source,
+            "source_path": args.corpus_db,
+            "corpus_provenance": _corpus_provenance(
+                source_provenance,
+                input_keys=input_keys,
+                produced_at=produced_at,
+            ),
             "sampling": (
                 f"reservoir seed={args.seed} target_turns={target_turns} "
                 f"min_turn_chars={MIN_TURN_CHARS}"
             ),
             "base_url": EMBED_BASE_URL,
-            "date": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "date": produced_at,
         },
         "stats": {
             "mean": float(mags.mean()),

@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import json
 
+from scripts import embed_corpus
 from scripts.summarize_corpus import StoreSpec, _build_report, _human_size
 
 
 def _write_jsonl(path, rows):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def _record_source_sidecar(corpus, checkpoint):
+    source = embed_corpus.load_corpus_source(corpus=str(corpus))
+    embed_corpus.reconcile_source_sidecar(str(checkpoint), source.provenance)
 
 
 def test_build_report_derives_expected_counts(tmp_path):
@@ -30,6 +36,7 @@ def test_build_report_derives_expected_counts(tmp_path):
         ],
     )
     checkpoint = tmp_path / "ckpt.jsonl"
+    _record_source_sidecar(corpus, checkpoint)
     _write_jsonl(
         checkpoint,
         [
@@ -67,6 +74,7 @@ def test_build_report_reads_meta_sidecar(tmp_path):
     corpus = tmp_path / "corpus.jsonl"
     _write_jsonl(corpus, [{"chunk_id": "a", "text": "alpha"}])
     checkpoint = tmp_path / "ckpt.jsonl"
+    _record_source_sidecar(corpus, checkpoint)
     _write_jsonl(checkpoint, [{"chunk_id": "a", "embedding": [0.1, 0.2]}])
     meta = tmp_path / "ckpt.jsonl.meta.json"
     meta.write_text(json.dumps({"model_name": "some-model", "dimensions": 2}), encoding="utf-8")

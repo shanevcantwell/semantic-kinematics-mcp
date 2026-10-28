@@ -22,8 +22,9 @@ measures *two instruments* instead of voice. Identical means all of:
 | Dim | 4096 | sidecar |
 | Normalization | `F.normalize(p=2, dim=1)` — unit sphere | `nv_embed_adapter.py:278,309` (do not change) |
 | Pooling | NV-Embed's own `model.encode()` (latent-attention) | adapter (do not reimplement) |
-| Chunk unit | **one chunk per message** (matches thought-vault) | your Phase-2 chunker |
-| Output schema | `{"chunk_id": str, "embedding": [4096 floats]}` + `.meta.json` | `BulkEmbedder`, automatic |
+| Chunk unit | **one chunk per message** (matches thought-vault) | canonical TVI rows for Phase 0; your Phase-2 chunker for new corpora |
+| Text/ID authority | promoted TVI canonical DB, queried through `tvi-canonical-corpus` (`input_key=base`) | verified-open query provenance |
+| Vector boundary | `{"chunk_id": str, "embedding": [4096 floats]}` + model `.meta.json`; no corpus text copied into checkpoint rows | `BulkEmbedder`, automatic |
 | Hardware | **the RTX-8000 host** (same box that made nv4096) | you run there |
 
 If any facet cannot be held identical, **STOP and report** which one and why. Do not
@@ -43,13 +44,20 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 bash scripts/embed_full_corpus.sh
 ```
 
-- **Input contract:** `CORPUS` is JSONL; each line has a `text` field and a `chunk_id` field.
+- **New contrast-corpus input contract:** `CORPUS` is generic JSONL; each line has a `text`
+  field and a `chunk_id` field. This mode remains supported because Nemotron and other external
+  corpora are not TVI acquisitions.
+- **Existing thought-vault text/ID contract:** never recover text or IDs from a vector file or a
+  stale JSONL export. Query the promoted canonical DB through the installed
+  `tvi-canonical-corpus` CLI. The concrete Phase-0 command is below.
 - **Output contract (automatic):** `{chunk_id, embedding[4096]}` per line + a
   `<CKPT>.meta.json` sidecar `{"model_name":"NVEmbed:nvidia/NV-Embed-v2","dimensions":4096}`.
-  The sidecar **fail-loud blocks** mixing a different model/dim into an existing checkpoint —
-  do not delete or bypass it.
-- Your whole job is: **fetch → select exemplars → chunk to the input contract → run the driver
-  → verify → compact.**
+  The checkpoint and model sidecar remain model-keyed derived vector state. A separate atomic
+  `<CKPT>.source.json` records source generation/query identity; do not copy text into vector rows
+  or overload the model sidecar with corpus identity. Resume fails loud on either model/dim or
+  source-generation/query mismatch — do not delete or bypass either sidecar.
+- Your whole job is: **fetch → select exemplars → chunk to the generic JSONL contract → run the
+  driver → verify → compact.** Thought-vault is used only as the canonical Phase-0 reference leg.
 
 ---
 
@@ -58,11 +66,25 @@ bash scripts/embed_full_corpus.sh
 ### Phase 0 — Prove the path FIRST (the invariant gate)
 Before spending any compute on new data, prove your embedding path reproduces nv4096's.
 
-1. From `thought-vault-integration/output/thought-vault-integration-data/nv4096/corpus_4096.jsonl`,
-   pick **20 chunk_ids** whose stored vector is real (not `_failed`, not zero-norm).
-2. Recover their source `text` from thought-vault's `output/vectors/chunks.jsonl`
-   (join on `chunk_id`).
-3. Embed those 20 texts through the driver above into a scratch `CKPT`.
+1. From the existing nv4096 checkpoint, pick **20 chunk_ids** whose stored vector is real
+   (not `_failed`, not zero-norm). Treat this file only as the model-keyed vector/reference leg.
+2. Recover the matching source `text` and authoritative `chunk_id` from the promoted TVI DB —
+   not from `output/vectors/chunks.jsonl` and not from the vector checkpoint:
+
+   ```bash
+   /path/to/tvi-canonical-corpus query chunks \
+       --db /path/to/output/canonical/corpus.db \
+       --canonical-root /path/to/output/canonical \
+       --format jsonl --all-pages --input-key base
+   ```
+
+   Verify the metadata record declares `verified_open=true`, retain its generation/query
+   provenance in the Phase-5 note, and join the 20 selected vector IDs to canonical rows by
+   `chunk_id`. Missing or duplicate matches are a hard STOP.
+3. Write only those 20 canonical `(chunk_id, text)` pairs to a scratch generic JSONL file, then
+   embed them through the driver above into a fresh scratch `CKPT`. This bounded JSONL bridge is
+   allowed because the canonical query already established the text/ID authority; it does not
+   make legacy JSONL authoritative again.
 4. For each, compute `cosine(new_vector, stored_vector)`.
 
 **GATE:** all 20 cosines ≥ **0.9999**. (Same path → same vectors; nv-embed fp16 is
@@ -120,9 +142,12 @@ Report true completion rate and the stuck-residue count. (For reference, nv4096 
 
 ### Phase 5 — Report (deliverable + provenance)
 Emit a short meta note beside the clean corpus: dataset(s) + versions, N, chunk unit, model id
-(from sidecar), true completion rate, stuck residue, and the **Phase-0 invariant cosines**
-(the proof the path matched). This provenance is what makes the corpus usable as a contrast
-leg — without it, a future reader cannot trust the comparison.
+(from the model sidecar), generic input JSONL hash/source sidecar identity, true completion rate,
+stuck residue, the canonical TVI generation/query provenance used for Phase 0, and the
+**Phase-0 invariant cosines** (the proof the path matched). Keep these identities adjacent in the
+note but do not collapse their boundaries: TVI owns thought-vault text/IDs; the checkpoint remains
+model-keyed vector state; the new external contrast corpus remains a generic JSONL source. Without
+that provenance, a future reader cannot trust the comparison.
 
 ---
 

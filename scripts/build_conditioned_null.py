@@ -11,7 +11,8 @@ with the comedic signal and must be absorbed by the null before any number is re
 (ADR Decision 5).
 
 Pipeline:
-  1. Stream vault chunks.jsonl (read-only). Reservoir-subsample turns, fixed seed.
+  1. Stream verified canonical vault rows through the TVI query CLI, scoped to
+     ``input_key=base`` by default. Reservoir-subsample turns, fixed seed.
   2. For each sampled turn: ``segment(turn_text)`` -> phrase list.
   3. For each k in K_RANGE: ``conditioned_vectors(phrases, k, adapter)`` -> the
      conditioned trajectory + per-phrase ConditionedStep keys.
@@ -39,6 +40,8 @@ import os
 import random
 import sys
 import time
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -46,22 +49,34 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from semantic_kinematics.bearing.conditioned import (  # noqa: E402
+from scripts.tvi_canonical_input import (
+    DEFAULT_EXECUTABLE,
+    CanonicalInputError,
+    CanonicalQueryProvenance,
+    open_canonical_chunks,
+)
+from semantic_kinematics.bearing.conditioned import (
     WindowTooLong,
     conditioned_vectors,
     length_bucket,
 )
-from semantic_kinematics.bearing.phrase_segment import segment  # noqa: E402
-from semantic_kinematics.embeddings.lmstudio import LMStudioAdapter  # noqa: E402
+from semantic_kinematics.bearing.phrase_segment import segment
+from semantic_kinematics.embeddings.lmstudio import LMStudioAdapter
 
-# Vault corpus location is environment-driven so the null build runs under any
-# user, not just the corpus author (issue #34). Override THOUGHT_VAULT_VECTORS_DIR
-# to point at a different thought-vault-integration output/vectors checkout.
-_VAULT_VECTORS_DIR = os.environ.get(
-    "THOUGHT_VAULT_VECTORS_DIR",
-    "/srv/dev/shanevcantwell/thought-vault-integration/output/vectors",
+# The live thought-vault source is the promoted canonical database. The
+# environment override keeps deployment-specific locations out of the CLI while
+# retaining a usable default for the established /srv layout (issue #34).
+DEFAULT_CORPUS_DB = os.environ.get(
+    "THOUGHT_VAULT_CANONICAL_DB",
+    "/srv/dev/shanevcantwell/thought-vault-integration/output/canonical/corpus.db",
 )
-DEFAULT_SOURCE = os.path.join(_VAULT_VECTORS_DIR, "chunks.jsonl")
+DEFAULT_CANONICAL_ROOT = os.environ.get("THOUGHT_VAULT_CANONICAL_ROOT")
+DEFAULT_TVI_EXECUTABLE = os.environ.get(
+    "TVI_CANONICAL_CORPUS_EXECUTABLE", DEFAULT_EXECUTABLE
+)
+DEFAULT_INPUT_KEYS = ("base",)
+CONSUMER_NAME = "semantic-kinematics.build_conditioned_null"
+CONSUMER_VERSION = "1.0"
 EMBED_MODEL = "embeddinggemma-300M-F32-nonpooled"
 EMBED_BASE_URL = "http://localhost:8083/v1"
 EXPECTED_DIM = 768
@@ -85,34 +100,85 @@ DEMARCATOR_CLASSES = [
 ]
 
 
-def _reservoir_sample_turns(path: str, k: int, seed: int):
-    """Reservoir-sample up to k usable turns from a streamed jsonl (read-only).
+def _iter_usable_texts(rows: Iterable[Mapping[str, Any]]) -> Iterator[str]:
+    """Yield the old null-builder population from rows in source order."""
+    for row in rows:
+        text = (row.get("text") or "").strip()
+        if len(text) >= MIN_TURN_CHARS:
+            yield text
 
-    A 'usable' turn has >= MIN_TURN_CHARS of text. Single pass, no full load.
-    """
+
+def _reservoir_sample_turns(
+    rows: Iterable[Mapping[str, Any]], k: int, seed: int
+) -> tuple[list[str], int]:
+    """Reservoir-sample usable turns in query-door order without buffering rows."""
     rng = random.Random(seed)
-    reservoir = []
+    reservoir: list[str] = []
     seen = 0
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            text = (rec.get("text") or "").strip()
-            if len(text) < MIN_TURN_CHARS:
-                continue
-            seen += 1
-            if len(reservoir) < k:
-                reservoir.append(text)
-            else:
-                j = rng.randint(0, seen - 1)
-                if j < k:
-                    reservoir[j] = text
+    for text in _iter_usable_texts(rows):
+        seen += 1
+        if len(reservoir) < k:
+            reservoir.append(text)
+        else:
+            j = rng.randint(0, seen - 1)
+            if j < k:
+                reservoir[j] = text
     return reservoir, seen
+
+
+def _normalize_input_keys(input_keys: Iterable[str]) -> tuple[str, ...]:
+    keys = tuple(sorted(input_keys))
+    if not keys:
+        raise ValueError("at least one --input-key is required")
+    if len(set(keys)) != len(keys):
+        raise ValueError("--input-key values must not contain duplicates")
+    return keys
+
+
+def _sample_canonical_turns(
+    corpus_db: str,
+    *,
+    canonical_root: str | None,
+    input_keys: tuple[str, ...],
+    k: int,
+    seed: int,
+    executable: str,
+) -> tuple[list[str], int, CanonicalQueryProvenance]:
+    """Sample one verified TVI traversal; acquisition failures propagate."""
+    with open_canonical_chunks(
+        corpus_db,
+        canonical_root=canonical_root,
+        input_keys=input_keys,
+        executable=executable,
+    ) as stream:
+        provenance = stream.provenance
+        turns, seen = _reservoir_sample_turns(stream, k, seed)
+    return turns, seen, provenance
+
+
+def _corpus_provenance(
+    provenance: CanonicalQueryProvenance,
+    *,
+    input_keys: tuple[str, ...],
+    produced_at: str,
+) -> dict[str, Any]:
+    block = provenance.as_dict()
+    block.update(
+        {
+            "source_kind": "tvi_canonical_db",
+            "normalized_input_keys": list(input_keys),
+            "normalized_filters": {
+                "channels": [],
+                "speakers": [],
+                "conversations": [],
+                "nonblank_text": None,
+                "time_roles": [],
+            },
+            "consumer": {"name": CONSUMER_NAME, "version": CONSUMER_VERSION},
+            "produced_at": produced_at,
+        }
+    )
+    return block
 
 
 def _percentiles(mags: np.ndarray) -> dict:
@@ -126,7 +192,27 @@ def _percentiles(mags: np.ndarray) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--source", default=DEFAULT_SOURCE, help="vault chunks.jsonl")
+    ap.add_argument(
+        "--corpus-db",
+        default=DEFAULT_CORPUS_DB,
+        help="promoted TVI canonical corpus.db (verified-open; no JSONL fallback)",
+    )
+    ap.add_argument(
+        "--canonical-root",
+        default=DEFAULT_CANONICAL_ROOT,
+        help="optional trusted TVI canonical root for direct generation paths",
+    )
+    ap.add_argument(
+        "--input-key",
+        action="append",
+        dest="input_keys",
+        help="canonical acquisition key (repeatable; default: base)",
+    )
+    ap.add_argument(
+        "--tvi-executable",
+        default=DEFAULT_TVI_EXECUTABLE,
+        help="installed tvi-canonical-corpus executable",
+    )
     ap.add_argument(
         "--turns",
         type=int,
@@ -145,13 +231,27 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if not os.path.isfile(args.source):
-        print(f"FATAL: source not found: {args.source}", file=sys.stderr)
-        return 2
+    try:
+        input_keys = _normalize_input_keys(args.input_keys or DEFAULT_INPUT_KEYS)
+    except ValueError as exc:
+        ap.error(str(exc))
 
-    print(f"Reservoir-sampling {args.turns} turns (seed={args.seed}) "
-          f"from {args.source} ...")
-    turns, total_usable = _reservoir_sample_turns(args.source, args.turns, args.seed)
+    print(
+        f"Reservoir-sampling {args.turns} turns (seed={args.seed}) "
+        f"from canonical DB {args.corpus_db} input_keys={list(input_keys)} ..."
+    )
+    try:
+        turns, total_usable, source_provenance = _sample_canonical_turns(
+            args.corpus_db,
+            canonical_root=args.canonical_root,
+            input_keys=input_keys,
+            k=args.turns,
+            seed=args.seed,
+            executable=args.tvi_executable,
+        )
+    except CanonicalInputError as exc:
+        print(f"FATAL: canonical corpus query failed: {exc}", file=sys.stderr)
+        return 2
     print(f"  sampled {len(turns)} turns out of {total_usable} usable in stream")
 
     adapter = LMStudioAdapter(model_name=EMBED_MODEL, base_url=EMBED_BASE_URL)
@@ -263,6 +363,7 @@ def main() -> int:
         },
     }
 
+    produced_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
     artifact = {
         "header": {
             "regime": "bearing-magnitude-conditioned",
@@ -273,17 +374,22 @@ def main() -> int:
             "k_range": K_RANGE,
             "length_buckets": LENGTH_BUCKETS_LABELS,
             "demarcator_classes": DEMARCATOR_CLASSES,
-            "n_turns_sampled": int(len(turns)),
+            "n_turns_sampled": len(turns),
             "n_turns_contributing": int(n_turns_contributing),
             "n_turns_skipped_toolong": int(n_turns_skipped_toolong),
             "n_deltas": int(n_deltas_total),
-            "source_path": args.source,
+            "source_path": args.corpus_db,
+            "corpus_provenance": _corpus_provenance(
+                source_provenance,
+                input_keys=input_keys,
+                produced_at=produced_at,
+            ),
             "base_url": EMBED_BASE_URL,
             "sampling": (
                 f"reservoir seed={args.seed} turns={args.turns} "
                 f"min_turn_chars={MIN_TURN_CHARS}"
             ),
-            "date": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "date": produced_at,
         },
         "strata": stratum_blocks,
         "bias_diagnostics": bias_diagnostics,

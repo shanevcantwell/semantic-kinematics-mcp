@@ -71,7 +71,10 @@ Path resolution is environment-driven (no hardcoded home directories — issue #
 | Variable | Used by | Default |
 |----------|---------|---------|
 | `NV_EMBED_MODEL_PATH` | both in-process backends (`nv_embed` + `sentence_transformers`) | `nvidia/NV-Embed-v2` (HuggingFace hub id; set to a local checkout to skip download) |
-| `THOUGHT_VAULT_VECTORS_DIR` | null builders (`build_displacement_null` / `build_conditioned_null`) and `smoke_jolt` | `/srv/dev/shanevcantwell/thought-vault-integration/output/vectors` |
+| `THOUGHT_VAULT_CANONICAL_DB` | measured-null builders | `/srv/dev/shanevcantwell/thought-vault-integration/output/canonical/corpus.db` |
+| `THOUGHT_VAULT_CANONICAL_ROOT` | measured-null builders (optional trusted root for direct-generation paths) | unset |
+| `TVI_CANONICAL_CORPUS_EXECUTABLE` | canonical TVI consumers | `tvi-canonical-corpus` |
+| `THOUGHT_VAULT_VECTORS_DIR` | vector-bound `smoke_jolt` only | `/srv/dev/shanevcantwell/thought-vault-integration/output/vectors` |
 
 ## MCP Tools
 
@@ -104,7 +107,23 @@ Path resolution is environment-driven (no hardcoded home directories — issue #
 
 ## Bulk Embedding a Corpus
 
-`BulkEmbedder` (`semantic_kinematics/embeddings/bulk.py`) turns a JSONL corpus into vectors at scale. It wraps any backend and adds **windowed crash-resume** (it streams prep + embed in windows of `prep_window` items, default 256 — checkpointing each embedded item to JSONL, so an interrupted run re-preps only the not-yet-checkpointed remainder and the *whole* run, prep included, reconstructs from the checkpoint rather than restarting from scratch), **token-aware batching** (packs requests under a token budget), **sub-chunking with vector averaging** (splits over-long items, averages the piece vectors), and **backoff retries**.
+`BulkEmbedder` (`semantic_kinematics/embeddings/bulk.py`) turns an ordered text/ID corpus into vectors at scale. For thought-vault data, text and `chunk_id` now come through TVI's verified canonical DB query door; generic/non-TVI JSONL remains an explicit supported input mode. The embedder wraps any backend and adds **windowed crash-resume** (it streams prep + embed in windows of `prep_window` items, default 256 — checkpointing each embedded item to JSONL, so an interrupted run re-preps only the not-yet-checkpointed remainder and the *whole* run, prep included, reconstructs from the checkpoint rather than restarting from scratch), **token-aware batching** (packs requests under a token budget), **sub-chunking with vector averaging** (splits over-long items, averages the piece vectors), and **backoff retries**.
+
+Canonical TVI input (repeat `--input-key` to combine explicit acquisition legs):
+
+```bash
+python scripts/embed_corpus.py \
+    --corpus-db /path/to/output/canonical/corpus.db \
+    --canonical-root /path/to/output/canonical \
+    --input-key base \
+    --tvi-executable /path/to/bin/tvi-canonical-corpus \
+    --checkpoint out.jsonl \
+    --backend lmstudio \
+    --base-url http://localhost:8082/v1 \
+    --model embeddinggemma-300M-F32
+```
+
+Generic JSONL remains available for new contrast corpora and other non-TVI data:
 
 ```bash
 python scripts/embed_corpus.py corpus.jsonl \
@@ -128,11 +147,21 @@ python scripts/embed_corpus.py corpus.jsonl \
     --max-tokens-per-chunk 8000
 ```
 
-For a full corpus, **`scripts/embed_full_corpus.sh`** is the canonical runner: it wraps the above with auto-restart on crash and a success-count-based completion signal (via `scripts/embed_status.py`) so a run that crashes mid-way resumes cleanly and never false-completes on `_failed` items. See `scripts/embed_status.py` to check progress at any time — it prints `done failed pending total` for a (corpus, checkpoint) pair.
+For a full thought-vault corpus, **`scripts/embed_full_corpus.sh`** is the canonical runner: it defaults to the canonical DB (`CORPUS_DB`, `INPUT_KEYS=base`) and wraps the above with auto-restart on crash and a success-count-based completion signal (via `scripts/embed_status.py`) so a run that crashes mid-way resumes cleanly and never false-completes on `_failed` items. Set `CORPUS=/path/to/corpus.jsonl` instead for an explicit generic JSONL run; `CORPUS` and `CORPUS_DB` are mutually exclusive. `scripts/embed_status.py` prints `done failed pending total` for either source mode and the same checkpoint.
 
-- **Input:** a JSONL file, one object per line; `--text-field` / `--id-field` name the text and id keys (blank-text lines are skipped; missing ids default to `line-N`).
-- **Output:** the `--checkpoint` JSONL — one record per embedded item. Re-running with the same checkpoint skips already-embedded items and retries only failures (idempotent resume). A sidecar `<checkpoint>.meta.json` records the producing model (`model_name` + `dimensions`); resuming a checkpoint built by a different model fails loud rather than silently merging incompatible vectors (#16).
-- **Where it sits:** `BulkEmbedder` is a *data-plane* job on the shared adapter substrate — it never crosses the MCP contract boundary. Its output vectors feed downstream analysis, e.g. building the axis-alignment background null. Upstream corpus preparation (chat logs → chunked JSONL) lives in the sibling **thought-vault-integration** repo. See [ARCHITECTURE.md → Data pipeline](docs/ARCHITECTURE.md#data-pipeline-bulk-embedding).
+- **Canonical TVI input:** `--corpus-db` plus one or more `--input-key` values. The external `tvi-canonical-corpus` CLI performs verified-open and streams rows in canonical query order; a query/provenance failure is fatal and never falls back to legacy JSONL.
+- **Generic JSONL input:** one object per line; `--text-field` / `--id-field` name the text and id keys (blank-text lines are skipped; missing ids default to `line-N`). This mode remains the contract for Nemotron and other newly prepared contrast corpora.
+- **Vector boundary:** the `--checkpoint` JSONL remains model-keyed derived state: one `{chunk_id, embedding}` record per item. `<checkpoint>.meta.json` records the producing model (`model_name` + `dimensions`), and a model mismatch fails loud (#16). Corpus generation/query identity is deliberately separate in atomic `<checkpoint>.source.json`; resume refuses a changed canonical generation/query (or changed generic file hash) without putting source metadata into each vector record.
+- **Where it sits:** `BulkEmbedder` is a *data-plane* job on the shared adapter substrate — it never crosses the MCP contract boundary. Its output vectors feed downstream analysis, e.g. building the axis-alignment background null. The sibling **thought-vault-integration** repo owns ingestion and promotion of text/IDs into its canonical DB; sk-mcp reads them through the installed query CLI. See [ARCHITECTURE.md → Data pipeline](docs/ARCHITECTURE.md#data-pipeline-bulk-embedding).
+
+Host-local release evidence for the DB cutover is opt-in because it depends on a promoted real generation:
+
+```bash
+SK_RUN_REAL_TVI_PARITY=1 python -m pytest -s -m real_generation \
+    tests/test_real_tvi_generation_parity.py
+```
+
+That test compares the canonical DB against the legacy `output/vectors/chunks.jsonl` byte-for-byte in consumer order: usable null-builder text, fixed-seed reservoir samples, and ordered `(chunk_id, text)` embedding inputs. It constructs no adapter and refreshes no embeddings. The preregistration and observed results live in [`docs/experiments/2026-10-28-tvi-canonical-db-jsonl-parity.md`](docs/experiments/2026-10-28-tvi-canonical-db-jsonl-parity.md).
 
 ## Gradio UI
 

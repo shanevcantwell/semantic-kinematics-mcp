@@ -63,6 +63,9 @@ include = ["semantic_kinematics*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-v", "--tb=short"]
+markers = [
+    "real_generation: opt-in parity against host-local promoted TVI artifacts",
+]
 
 [tool.ruff]
 line-length = 100
