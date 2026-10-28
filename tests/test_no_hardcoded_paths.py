@@ -9,15 +9,13 @@ is environment-driven with a working default.
 from __future__ import annotations
 
 import importlib
-import os
 import re
+from pathlib import Path
 
 import pytest
 
 # Modules touched by the #34 fix and the source files behind them.
-import scripts.build_conditioned_null as build_conditioned_null
-import scripts.build_displacement_null as build_displacement_null
-import scripts.smoke_jolt as smoke_jolt
+from scripts import build_conditioned_null, build_displacement_null, smoke_jolt
 from semantic_kinematics.embeddings import sentence_transformers_adapter
 
 _TOUCHED_MODULES = [
@@ -28,6 +26,7 @@ _TOUCHED_MODULES = [
 ]
 
 VAULT_ENV = "THOUGHT_VAULT_VECTORS_DIR"
+CANONICAL_DB_ENV = "THOUGHT_VAULT_CANONICAL_DB"
 MODEL_ENV = "NV_EMBED_MODEL_PATH"
 
 
@@ -65,32 +64,48 @@ def test_adapter_model_path_env_override(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "module, attr, suffix",
-    [
-        (build_displacement_null, "DEFAULT_SOURCE", "chunks.jsonl"),
-        (build_conditioned_null, "DEFAULT_SOURCE", "chunks.jsonl"),
-        (smoke_jolt, "VAULT_DIR", ""),
-    ],
+    "module",
+    [build_displacement_null, build_conditioned_null],
 )
-def test_vault_path_env_override(monkeypatch, module, attr, suffix):
-    """THOUGHT_VAULT_VECTORS_DIR drives every vault-corpus consumer."""
-    monkeypatch.setenv(VAULT_ENV, "/srv/data/vault/vectors")
+def test_null_builder_canonical_db_env_override(monkeypatch, module):
+    """THOUGHT_VAULT_CANONICAL_DB drives both live TVI null builders."""
+    monkeypatch.setenv(CANONICAL_DB_ENV, "/srv/data/vault/canonical/corpus.db")
     importlib.reload(module)
     try:
-        resolved = getattr(module, attr)
-        expected = os.path.join("/srv/data/vault/vectors", suffix) if suffix else "/srv/data/vault/vectors"
-        assert resolved == expected
+        resolved = module.DEFAULT_CORPUS_DB
+        assert resolved == "/srv/data/vault/canonical/corpus.db"
         assert "/home/shane" not in resolved
     finally:
-        monkeypatch.delenv(VAULT_ENV, raising=False)
+        monkeypatch.delenv(CANONICAL_DB_ENV, raising=False)
         importlib.reload(module)
 
 
+def test_smoke_jolt_vault_path_env_override(monkeypatch):
+    """The still-vector-bound smoke tool retains its vectors-dir override."""
+    monkeypatch.setenv(VAULT_ENV, "/srv/data/vault/vectors")
+    importlib.reload(smoke_jolt)
+    try:
+        assert smoke_jolt.VAULT_DIR == "/srv/data/vault/vectors"
+    finally:
+        monkeypatch.delenv(VAULT_ENV, raising=False)
+        importlib.reload(smoke_jolt)
+
+
+def test_embed_wrapper_defaults_to_canonical_db_not_legacy_chunks_jsonl():
+    wrapper = Path(__file__).parents[1] / "scripts" / "embed_full_corpus.sh"
+    source = wrapper.read_text(encoding="utf-8")
+
+    assert "output/canonical/corpus.db" in source
+    assert "output/vectors/chunks.jsonl" not in source
+    assert "/home/" not in source
+    assert 'CORPUS="${CORPUS:-' not in source  # generic mode must be explicit
+
+
 def test_vault_path_default_rooted_outside_home():
-    """Default vault dir is rooted at /srv, not a user home directory."""
+    """Default TVI paths are rooted at /srv, not a user home directory."""
     for module, attr in [
-        (build_displacement_null, "DEFAULT_SOURCE"),
-        (build_conditioned_null, "DEFAULT_SOURCE"),
+        (build_displacement_null, "DEFAULT_CORPUS_DB"),
+        (build_conditioned_null, "DEFAULT_CORPUS_DB"),
         (smoke_jolt, "VAULT_DIR"),
     ]:
         importlib.reload(module)
