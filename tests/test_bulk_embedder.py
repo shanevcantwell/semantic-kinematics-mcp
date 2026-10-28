@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from semantic_kinematics.embeddings.base import EmbeddingAdapter
-from semantic_kinematics.embeddings.bulk import BulkEmbedder
+from semantic_kinematics.embeddings.bulk import BulkEmbedder, is_valid_embedding_record
 
 DIM = 8
 
@@ -103,31 +103,80 @@ def test_request_batching_respects_token_budget():
     assert adapter.batch_sizes == [2, 2, 1]
 
 
-def test_resume_skips_valid_retries_failed_and_zero(tmp_path):
+@pytest.mark.parametrize(
+    ("name", "record", "expected"),
+    [
+        ("unmarked zero", {"embedding": [0.0] * DIM}, False),
+        ("wrong dimension", {"embedding": [1.0] * (DIM - 1)}, False),
+        ("nonnumeric", {"embedding": ["not-a-number"] * DIM}, False),
+        ("nested", {"embedding": [[1.0] * DIM]}, False),
+        ("NaN", {"embedding": [float("nan")] + [1.0] * (DIM - 1)}, False),
+        ("Inf", {"embedding": [float("inf")] + [1.0] * (DIM - 1)}, False),
+        (
+            "_failed",
+            {"embedding": [1.0] * DIM, "_failed": True},
+            False,
+        ),
+        ("valid", {"embedding": ["1.0"] * DIM}, True),
+    ],
+)
+def test_embedding_validity_matrix(name, record, expected):
+    assert is_valid_embedding_record(record, DIM) is expected, name
+
+
+@pytest.mark.parametrize(
+    ("vector", "expected_valid"),
+    [
+        ([0.0] * DIM, False),
+        ([1.0] * (DIM - 1), False),
+        (["not-a-number"] * DIM, False),
+        ([[1.0] * DIM], False),
+        ([float("nan")] + [1.0] * (DIM - 1), False),
+        ([float("inf")] + [1.0] * (DIM - 1), False),
+        (["1.0"] * DIM, True),
+    ],
+)
+def test_generated_vectors_use_shared_validity_predicate(vector, expected_valid):
+    class RawVectorAdapter(FakeAdapter):
+        def embed_batch(self, texts: list[str]) -> np.ndarray:
+            self.batch_calls += 1
+            self.batch_sizes.append(len(texts))
+            return np.asarray([vector])
+
+    result = BulkEmbedder(RawVectorAdapter()).embed_corpus([("text", "item")])
+
+    assert ("item" in result) is expected_valid
+
+
+def test_resume_retries_every_invalid_vector_shape(tmp_path):
     checkpoint = tmp_path / "ckpt.jsonl"
     valid_vec = _unit_vector_for("valid-text").tolist()
-    lines = [
-        {"chunk_id": "valid", "embedding": valid_vec},
-        {"chunk_id": "failed", "embedding": [0.0] * DIM, "_failed": True},
+    invalid_rows = [
         {"chunk_id": "zero", "embedding": [0.0] * DIM},
+        {"chunk_id": "wrong-dim", "embedding": [1.0] * (DIM - 1)},
+        {"chunk_id": "nonnumeric", "embedding": ["bad"] * DIM},
+        {"chunk_id": "nested", "embedding": [[1.0] * DIM]},
+        {"chunk_id": "nan", "embedding": [float("nan")] + [1.0] * (DIM - 1)},
+        {"chunk_id": "inf", "embedding": [float("inf")] + [1.0] * (DIM - 1)},
+        {"chunk_id": "failed", "embedding": valid_vec, "_failed": True},
     ]
-    checkpoint.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    checkpoint.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [*invalid_rows, {"chunk_id": "valid", "embedding": valid_vec}]
+        )
+        + "\n"
+    )
 
     adapter = FakeAdapter()
     embedder = BulkEmbedder(adapter, checkpoint_path=str(checkpoint))
-
-    items = [
-        ("valid-text", "valid"),
-        ("failed-text", "failed"),
-        ("zero-text", "zero"),
-    ]
+    items = [(f"text-{row['chunk_id']}", row["chunk_id"]) for row in invalid_rows]
+    items.append(("valid-text", "valid"))
     result = embedder.embed_corpus(items)
 
-    # All three present in output, but only the 2 retried ones hit the backend.
-    assert set(result) == {"valid", "failed", "zero"}
+    assert set(result) == {row["chunk_id"] for row in invalid_rows} | {"valid"}
     assert adapter.batch_calls == 1
-    assert adapter.batch_sizes == [2]
-    # The valid one is the checkpointed vector.
+    assert adapter.batch_sizes == [len(invalid_rows)]
     np.testing.assert_allclose(result["valid"], np.asarray(valid_vec))
 
 
@@ -200,7 +249,7 @@ class NonUnitAdapter(FakeAdapter):
 
     def embed_batch(self, texts: List[str]) -> np.ndarray:
         base = super().embed_batch(texts)
-        scales = np.array([10.0 ** i for i in range(len(texts))]).reshape(-1, 1)
+        scales = np.array([10.0**i for i in range(len(texts))]).reshape(-1, 1)
         return base * scales
 
 
@@ -370,9 +419,7 @@ def test_hard_split_bisect_on_runon_input_terminates_under_ceiling():
 
     adapter = DenseAdapter()
     ceiling = 20
-    embedder = BulkEmbedder(
-        adapter, max_tokens_per_chunk=ceiling, max_tokens_per_request=10_000
-    )
+    embedder = BulkEmbedder(adapter, max_tokens_per_chunk=ceiling, max_tokens_per_request=10_000)
     # No ., !, ?, or newline anywhere -> one atomic "sentence" far over ceiling.
     runon = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
     assert adapter.count_tokens(runon) > ceiling

@@ -9,9 +9,9 @@ copied from a prior report or a Slack message. Shape adapted from
 do-not-hand-edit banner, Overview table + per-item detail sections).
 
 Reuses ``scripts.embed_status.compute_status`` verbatim for the
-done/failed/pending/total derivation (dedup-keep-last, exclude ``_failed``,
-exclude zero-norm) rather than reimplementing that logic — see
-``embed_status.py`` for the exact semantics. ``compute_status`` already reads
+done/failed/pending/total derivation (dedup-keep-last and the package-level
+embedding validity/dimension contract) rather than reimplementing that logic —
+see ``embed_status.py`` for the exact semantics. ``compute_status`` already reads
 the checkpoint line-by-line (a generator loop over ``open(checkpoint)``), so
 it does not load multi-gigabyte checkpoints into memory; the only full-file
 read is the corpus itself (small — the embeddable-item list), which is
@@ -46,7 +46,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from scripts.embed_status import compute_status  # noqa: E402
+from scripts.embed_status import compute_status, load_checkpoint_metadata
 
 OUTPUT_MARKDOWN_FILE = "docs/generated/CORPUS_STATS.md"
 
@@ -111,42 +111,8 @@ def _human_size(num_bytes: int) -> str:
 
 
 def _read_meta(checkpoint_path: Path) -> tuple[str | None, int | None]:
-    """Read ``<checkpoint>.meta.json`` -> (model_name, dimensions), or (None, None)."""
-    meta_path = Path(str(checkpoint_path) + ".meta.json")
-    if not meta_path.is_file():
-        return None, None
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None, None
-    return data.get("model_name"), data.get("dimensions")
-
-
-def _infer_dim_from_first_embedding(checkpoint_path: Path) -> int | None:
-    """Fallback dim inference: length of the first non-failed embedding array.
-
-    Used only when no ``.meta.json`` sidecar exists (e.g. the 768 store,
-    tvi#37) — streams line-by-line and stops at the first hit, so this is
-    safe to run against a large checkpoint.
-    """
-    if not checkpoint_path.is_file():
-        return None
-    with open(checkpoint_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("_failed"):
-                continue
-            emb = obj.get("embedding")
-            if isinstance(emb, list) and emb:
-                return len(emb)
-    return None
+    """Read the authoritative model/dimension contract for a checkpoint."""
+    return load_checkpoint_metadata(str(checkpoint_path))
 
 
 def _raw_and_distinct_counts(checkpoint_path: Path) -> tuple[int, int]:
@@ -211,10 +177,8 @@ def _build_report(repo_root: Path, spec: StoreSpec) -> StoreReport:
     elapsed = time.monotonic() - start
 
     model_name, dim = _read_meta(checkpoint_path)
-    missing_sidecar = model_name is None
-    if missing_sidecar:
+    if model_name is None:
         model_name = "(MISSING SIDECAR — tvi#37)"
-        dim = _infer_dim_from_first_embedding(checkpoint_path)
 
     checkpoint_exists = checkpoint_path.is_file()
     mtime_iso = None
@@ -284,9 +248,7 @@ def _render(reports: list[StoreReport]) -> str:
         lines.append(f"- **Checkpoint mtime**: {r.checkpoint_mtime_iso or '(no checkpoint)'} (UTC)")
         lines.append(f"- **Raw checkpoint lines**: {r.raw_lines:,}")
         lines.append(f"- **Distinct chunk_ids**: {r.distinct_ids:,}")
-        lines.append(
-            f"- **Duplicate/retry lines** (raw − distinct): {r.duplicate_lines:,}"
-        )
+        lines.append(f"- **Duplicate/retry lines** (raw − distinct): {r.duplicate_lines:,}")
         lines.append(f"- **Done**: {r.done:,}")
         lines.append(f"- **Failed (residual, not superseded)**: {r.failed:,}")
         lines.append(f"- **Pending**: {r.pending:,}")

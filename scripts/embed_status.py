@@ -24,6 +24,48 @@ from scripts.embed_corpus import (
     reconcile_source_sidecar,
     source_summary,
 )
+from semantic_kinematics.embeddings.bulk import is_valid_embedding_record
+
+
+def _checkpoint_is_populated(checkpoint: str) -> bool:
+    """Return whether a checkpoint contains any non-whitespace record data."""
+    if not os.path.isfile(checkpoint):
+        return False
+    with open(checkpoint, "r", encoding="utf-8") as checkpoint_file:
+        return any(line.strip() for line in checkpoint_file)
+
+
+def load_checkpoint_metadata(checkpoint: str) -> tuple[str | None, int | None]:
+    """Return authoritative model/dimensions, failing closed when populated.
+
+    An absent or whitespace-only checkpoint has no completed records, so it may
+    legitimately have no metadata. Once any record data exists, the bulk
+    sidecar contract requires a readable JSON object with a non-empty model name
+    and a positive integer dimension.
+    """
+    if not _checkpoint_is_populated(checkpoint):
+        return None, None
+
+    meta_path = checkpoint + ".meta.json"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as meta_file:
+            metadata = json.load(meta_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"populated checkpoint metadata {meta_path!r} is missing or unreadable: {exc}"
+        ) from exc
+
+    if not isinstance(metadata, dict):
+        raise ValueError(  # noqa: TRY004 -- public status contract uses ValueError.
+            f"populated checkpoint metadata {meta_path!r} must be a JSON object"
+        )
+    model_name = metadata.get("model_name")
+    dimensions = metadata.get("dimensions")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError(f"populated checkpoint metadata {meta_path!r} has invalid model_name")
+    if not isinstance(dimensions, int) or isinstance(dimensions, bool) or dimensions <= 0:
+        raise ValueError(f"populated checkpoint metadata {meta_path!r} has invalid dimensions")
+    return model_name, dimensions
 
 
 def compute_status(
@@ -64,6 +106,7 @@ def compute_status(
 
     done: set[str] = set()
     failed: set[str] = set()
+    checkpoint_ids: set[str] = set()
     with checkpoint_lock(checkpoint, exclusive=False):
         reconcile_source_sidecar(
             checkpoint,
@@ -71,6 +114,7 @@ def compute_status(
             write_if_missing=False,
             lock_held=True,
         )
+        _model_name, expected_dimensions = load_checkpoint_metadata(checkpoint)
         if os.path.exists(checkpoint):
             with open(checkpoint, "r", encoding="utf-8") as f:
                 for line in f:
@@ -81,16 +125,23 @@ def compute_status(
                         obj = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(obj, dict):
+                        continue
                     cid = obj.get("chunk_id")
                     if cid is None:
                         continue
                     cid = str(cid)
-                    if obj.get("_failed"):
-                        failed.add(cid)
-                    elif isinstance(obj.get("embedding"), list) and obj["embedding"]:
+                    checkpoint_ids.add(cid)
+                    if cid not in source_ids:
+                        continue
+                    if expected_dimensions is not None and is_valid_embedding_record(
+                        obj, expected_dimensions
+                    ):
                         done.add(cid)
+                    elif obj.get("_failed"):
+                        failed.add(cid)
 
-    extra_ids = (done | failed) - source_ids
+    extra_ids = checkpoint_ids - source_ids
     if extra_ids:
         raise ValueError(
             "checkpoint contains chunk_id values absent from the current source: "
@@ -148,9 +199,7 @@ def main(argv: list[str] | None = None) -> None:
             id_field=args.id_field,
             tvi_executable=args.tvi_executable,
         )
-        reconcile_source_sidecar(
-            args.checkpoint, source.provenance, write_if_missing=False
-        )
+        reconcile_source_sidecar(args.checkpoint, source.provenance, write_if_missing=False)
         print(source_summary(source.provenance))
         return
 

@@ -20,15 +20,45 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from semantic_kinematics.embeddings.base import EmbeddingAdapter
 
-
 # Sentence-boundary split: a ., !, or ? followed by whitespace, or a newline.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def is_valid_embedding_record(entry: object, expected_dimensions: int) -> bool:
+    """Return whether a checkpoint-style record contains a usable embedding.
+
+    This is the package-level validity contract shared by generation, resume,
+    and status/reporting consumers. Malformed values fail closed: the function
+    never raises for nonnumeric, nested, or otherwise invalid embeddings.
+    Numeric strings are accepted through explicit float coercion.
+    """
+    if (
+        not isinstance(entry, Mapping)
+        or not isinstance(expected_dimensions, int)
+        or isinstance(expected_dimensions, bool)
+        or expected_dimensions <= 0
+    ):
+        return False
+    try:
+        if bool(entry.get("_failed", False)):
+            return False
+        vector = np.asarray(entry.get("embedding"), dtype=float)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if vector.shape != (expected_dimensions,):
+        return False
+    if not bool(np.all(np.isfinite(vector))):
+        return False
+    with np.errstate(over="ignore", invalid="ignore"):
+        squared_magnitude = float(np.dot(vector, vector))
+    return squared_magnitude > 1e-10
 
 
 class BulkEmbedder:
@@ -203,13 +233,8 @@ class BulkEmbedder:
                         file=sys.stderr,
                     )
                     continue
-                if entry.get("_failed", False):
-                    continue
-                if not vec or len(vec) != dim:
-                    continue
-                arr = np.asarray(vec, dtype=float)
-                if float(np.dot(arr, arr)) > 1e-10:
-                    completed[cid] = arr
+                if is_valid_embedding_record(entry, dim):
+                    completed[cid] = np.asarray(vec, dtype=float)
         return completed
 
     @property
@@ -281,21 +306,11 @@ class BulkEmbedder:
             return vec
         return vec / norm
 
-    def _is_valid(self, vec: np.ndarray) -> bool:
-        return (
-            vec is not None
-            and vec.shape == (self.adapter.dimensions,)
-            and float(np.dot(vec, vec)) > 1e-10
-            and bool(np.all(np.isfinite(vec)))
-        )
-
     # ------------------------------------------------------------------
     # Corpus embedding
     # ------------------------------------------------------------------
 
-    def embed_corpus(
-        self, items: List[Tuple[str, str]]
-    ) -> Dict[str, np.ndarray]:
+    def embed_corpus(self, items: List[Tuple[str, str]]) -> Dict[str, np.ndarray]:
         """
         Embed a corpus of ``(text, chunk_id)`` items, resumably.
 
@@ -317,8 +332,7 @@ class BulkEmbedder:
         pending = [(text, cid) for (text, cid) in items if cid not in completed]
         skipped = total - len(pending)
         print(
-            f"[bulk] {total} total -- {skipped} from checkpoint, "
-            f"{len(pending)} pending",
+            f"[bulk] {total} total -- {skipped} from checkpoint, {len(pending)} pending",
             file=sys.stderr,
         )
 
@@ -362,7 +376,7 @@ class BulkEmbedder:
             # not). Windowing makes the whole run reconstruct-from-checkpoint --
             # a restart re-preps only items not yet written, never the corpus.
             for w_start in range(0, len(pending), self.prep_window):
-                batch = pending[w_start:w_start + self.prep_window]
+                batch = pending[w_start : w_start + self.prep_window]
 
                 # Precompute sub-chunks + token cost per item in THIS window. A
                 # count_tokens/_split_text failure for ONE item marks just that
@@ -429,7 +443,17 @@ class BulkEmbedder:
                     # Reassemble one vector per original text.
                     idx = 0
                     for (cid, _sub_chunks), k in zip(group, counts):
-                        if group_failed or embeddings is None:
+                        if (
+                            group_failed
+                            or embeddings is None
+                            or any(
+                                not is_valid_embedding_record(
+                                    {"embedding": embeddings[idx + offset]},
+                                    self.adapter.dimensions,
+                                )
+                                for offset in range(k)
+                            )
+                        ):
                             vec = None
                         elif k == 1:
                             # Single sub-chunk: exact passthrough up to L2-normalize,
@@ -448,8 +472,8 @@ class BulkEmbedder:
                             mean = normalized.mean(axis=0)
                             if float(np.linalg.norm(mean)) <= 1e-12:
                                 # Antipodal sub-chunks cancelled to ~zero: the mean
-                                # has no direction, so it'll fail _is_valid below and
-                                # be marked _failed. Name the chunk so it's findable.
+                                # has no direction, so the shared validity predicate
+                                # below rejects it. Name the chunk so it's findable.
                                 print(
                                     f"[bulk] item {cid!r}: {k} sub-chunk mean "
                                     f"collapsed to near-zero (antipodal); rejecting",
@@ -458,14 +482,11 @@ class BulkEmbedder:
                             vec = self._l2_normalize(mean)
                         idx += k
 
-                        if vec is not None and self._is_valid(vec):
+                        if is_valid_embedding_record({"embedding": vec}, self.adapter.dimensions):
                             completed[cid] = vec
                             if f_out is not None:
                                 f_out.write(
-                                    json.dumps(
-                                        {"chunk_id": cid, "embedding": vec.tolist()}
-                                    )
-                                    + "\n"
+                                    json.dumps({"chunk_id": cid, "embedding": vec.tolist()}) + "\n"
                                 )
                             done += 1
                         else:

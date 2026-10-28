@@ -28,7 +28,8 @@ def _fake_python(tmp_path: Path) -> tuple[Path, Path, Path]:
         "            print('source_kind=tvi_canonical_db generation_id=tvi-generation-v1:sha256:' + '1' * 64 + ' logical_digest_sha256=' + '2' * 64 + ' input_keys=base,delta')\n"
         "        else:\n"
         "            print('source_kind=legacy_jsonl path=/tmp/generic.jsonl sha256=' + '3' * 64)\n"
-        "    elif pathlib.Path(os.environ['FAKE_STATE']).exists():\n"
+        "    elif pathlib.Path(os.environ['FAKE_STATE']).exists()"
+        " and not os.environ.get('FAKE_INCOMPLETE'):\n"
         "        print('1 0 0 1')\n"
         "    else:\n"
         "        print('0 0 1 1')\n"
@@ -42,7 +43,9 @@ def _fake_python(tmp_path: Path) -> tuple[Path, Path, Path]:
     return executable, calls, state
 
 
-def _run_wrapper(tmp_path: Path, **source_env: str) -> tuple[list[list[str]], str, str]:
+def _run_wrapper(
+    tmp_path: Path, *, expected_returncode: int = 0, **source_env: str
+) -> tuple[list[list[str]], str, str, int]:
     fake_python, calls_path, state = _fake_python(tmp_path)
     log = tmp_path / "embed.log"
     checkpoint = tmp_path / "checkpoint.jsonl"
@@ -75,9 +78,9 @@ def _run_wrapper(tmp_path: Path, **source_env: str) -> tuple[list[list[str]], st
         check=False,
         timeout=10,
     )
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert completed.returncode == expected_returncode, completed.stderr + "\n" + completed.stdout
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
-    return calls, log.read_text(encoding="utf-8"), completed.stdout
+    return calls, log.read_text(encoding="utf-8"), completed.stdout, completed.returncode
 
 
 def _calls_for(calls: list[list[str]], script_name: str) -> list[list[str]]:
@@ -85,7 +88,7 @@ def _calls_for(calls: list[list[str]], script_name: str) -> list[list[str]]:
 
 
 def test_wrapper_forwards_canonical_source_to_embed_and_status(tmp_path):
-    calls, log, _ = _run_wrapper(
+    calls, log, _, _ = _run_wrapper(
         tmp_path,
         CORPUS_DB="/srv/tvi/output/canonical/corpus.db",
         INPUT_KEYS="base delta",
@@ -110,7 +113,7 @@ def test_wrapper_forwards_canonical_source_to_embed_and_status(tmp_path):
 def test_wrapper_retains_explicit_generic_corpus_mode(tmp_path):
     corpus = tmp_path / "generic.jsonl"
     corpus.write_text('{"chunk_id":"a","text":"alpha"}\n', encoding="utf-8")
-    calls, log, _ = _run_wrapper(tmp_path, CORPUS=str(corpus))
+    calls, log, _, _ = _run_wrapper(tmp_path, CORPUS=str(corpus))
 
     for script_name in ("embed_status.py", "embed_corpus.py"):
         child_calls = _calls_for(calls, script_name)
@@ -122,3 +125,20 @@ def test_wrapper_retains_explicit_generic_corpus_mode(tmp_path):
 
     assert "source_kind=legacy_jsonl" in log
     assert "generation_id=" not in log
+
+
+def test_wrapper_incomplete_status_stalls_nonzero_without_done(tmp_path):
+    corpus = tmp_path / "generic.jsonl"
+    corpus.write_text('{"chunk_id":"a","text":"alpha"}\n', encoding="utf-8")
+
+    _calls, log, stdout, returncode = _run_wrapper(
+        tmp_path,
+        expected_returncode=1,
+        CORPUS=str(corpus),
+        FAKE_INCOMPLETE="1",
+    )
+
+    assert returncode == 1
+    assert "[wrapper] DONE:" not in log
+    assert "[wrapper] DONE:" not in stdout
+    assert "[wrapper] STOP: no new successes across 3 passes" in log

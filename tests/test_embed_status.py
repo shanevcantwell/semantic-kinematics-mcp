@@ -21,9 +21,17 @@ def _write_jsonl(path, rows):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 
-def _write_sourced_checkpoint(path, rows, source):
+def _write_sourced_checkpoint(path, rows, source, *, dimensions=None):
     embed_corpus.reconcile_source_sidecar(str(path), source.provenance)
     _write_jsonl(path, rows)
+    if dimensions is None:
+        dimensions = next(
+            len(row["embedding"]) for row in rows if isinstance(row.get("embedding"), list)
+        )
+    path.with_name(path.name + ".meta.json").write_text(
+        json.dumps({"model_name": "test-model", "dimensions": dimensions}),
+        encoding="utf-8",
+    )
 
 
 def test_counts_done_failed_pending(tmp_path):
@@ -69,12 +77,75 @@ def test_later_success_supersedes_failed_marker(tmp_path):
     assert (done, failed, pending, total) == (1, 0, 0, 1)
 
 
-def test_missing_checkpoint_is_all_pending(tmp_path):
+@pytest.mark.parametrize("checkpoint_state", ["absent", "empty"])
+def test_absent_or_empty_checkpoint_is_all_pending(tmp_path, checkpoint_state):
     corpus = tmp_path / "corpus.jsonl"
     _write_jsonl(corpus, [{"chunk_id": "a", "text": "x"}, {"chunk_id": "b", "text": "y"}])
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    if checkpoint_state == "empty":
+        checkpoint.touch()
 
-    done, failed, pending, total = compute_status(str(corpus), str(tmp_path / "absent.jsonl"))
+    done, failed, pending, total = compute_status(str(corpus), str(checkpoint))
     assert (done, failed, pending, total) == (0, 0, 2, 2)
+
+
+@pytest.mark.parametrize(
+    ("name", "embedding", "failed"),
+    [
+        ("unmarked zero", [0.0, 0.0], False),
+        ("wrong dimension", [1.0], False),
+        ("nonnumeric", ["bad", "data"], False),
+        ("nested", [[1.0, 2.0]], False),
+        ("NaN", [float("nan"), 1.0], False),
+        ("Inf", [float("inf"), 1.0], False),
+        ("_failed", [1.0, 2.0], True),
+        ("valid", ["1.0", "2.0"], False),
+    ],
+)
+def test_invalid_vector_regression_matrix(tmp_path, name, embedding, failed):
+    corpus = tmp_path / "corpus.jsonl"
+    _write_jsonl(corpus, [{"chunk_id": "item", "text": "text"}])
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    row = {"chunk_id": "item", "embedding": embedding}
+    if failed:
+        row["_failed"] = True
+    _write_sourced_checkpoint(
+        checkpoint,
+        [row],
+        embed_corpus.load_corpus_source(corpus=str(corpus)),
+        dimensions=2,
+    )
+
+    status = compute_status(str(corpus), str(checkpoint))
+    if name == "valid":
+        assert status == (1, 0, 0, 1)
+    elif name == "_failed":
+        assert status == (0, 1, 1, 1)
+    else:
+        assert status == (0, 0, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "{ not json",
+        json.dumps({"model_name": "test-model", "dimensions": 0}),
+        json.dumps({"model_name": "test-model", "dimensions": "2"}),
+    ],
+)
+def test_populated_checkpoint_requires_valid_positive_dimension_metadata(tmp_path, metadata):
+    corpus = tmp_path / "corpus.jsonl"
+    _write_jsonl(corpus, [{"chunk_id": "a", "text": "alpha"}])
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    source = embed_corpus.load_corpus_source(corpus=str(corpus))
+    embed_corpus.reconcile_source_sidecar(str(checkpoint), source.provenance)
+    _write_jsonl(checkpoint, [{"chunk_id": "a", "embedding": [0.5, 0.5]}])
+    if metadata is not None:
+        checkpoint.with_name(checkpoint.name + ".meta.json").write_text(metadata, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="metadata"):
+        compute_status(str(corpus), str(checkpoint))
 
 
 class _CanonicalStream:
