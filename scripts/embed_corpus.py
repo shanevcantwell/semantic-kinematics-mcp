@@ -38,6 +38,9 @@ from semantic_kinematics.embeddings.bulk import BulkEmbedder
 CONSUMER_NAME = "semantic-kinematics.embed_corpus"
 CONSUMER_VERSION = "1.0"
 SOURCE_SIDECAR_SUFFIX = ".source.json"
+CANONICAL_SOURCE_KIND = "tvi_canonical_db"
+GENERIC_SOURCE_KIND = "generic_jsonl"
+LEGACY_GENERIC_SOURCE_KIND = "legacy_jsonl"
 
 
 @dataclass(frozen=True)
@@ -126,7 +129,7 @@ def _canonical_provenance(
     block = provenance.as_dict()
     block.update(
         {
-            "source_kind": "tvi_canonical_db",
+            "source_kind": CANONICAL_SOURCE_KIND,
             "database_path": os.path.abspath(corpus_db),
             "normalized_input_keys": list(input_keys),
             "normalized_filters": {
@@ -180,7 +183,7 @@ def _read_jsonl_source(path: str, text_field: str, id_field: str) -> CorpusSourc
     return CorpusSource(
         items,
         {
-            "source_kind": "legacy_jsonl",
+            "source_kind": GENERIC_SOURCE_KIND,
             "path": resolved,
             "sha256": sha256,
             "text_field": text_field,
@@ -218,9 +221,15 @@ def load_corpus_source(
     return _read_jsonl_source(corpus, text_field, id_field)
 
 
-def _source_identity(provenance: dict[str, Any]) -> dict[str, Any]:
+def source_identity(provenance: dict[str, Any]) -> dict[str, Any]:
+    """Return the identity of a current canonical or generic source.
+
+    ``legacy_jsonl`` is never valid current provenance. Its compatibility is
+    directional and is handled only by :func:`stored_source_identity` after an
+    existing sidecar has been read.
+    """
     kind = provenance.get("source_kind")
-    if kind == "tvi_canonical_db":
+    if kind == CANONICAL_SOURCE_KIND:
         query = provenance.get("query")
         if not isinstance(query, dict):
             raise ValueError("canonical source provenance has no query identity")
@@ -229,7 +238,7 @@ def _source_identity(provenance: dict[str, Any]) -> dict[str, Any]:
             "generation_id": provenance.get("generation_id"),
             "query_fingerprint_sha256": query.get("query_fingerprint_sha256"),
         }
-    if kind == "legacy_jsonl":
+    if kind == GENERIC_SOURCE_KIND:
         return {
             "source_kind": kind,
             "path": provenance.get("path"),
@@ -237,7 +246,41 @@ def _source_identity(provenance: dict[str, Any]) -> dict[str, Any]:
             "text_field": provenance.get("text_field"),
             "id_field": provenance.get("id_field"),
         }
+    if kind == LEGACY_GENERIC_SOURCE_KIND:
+        raise ValueError(
+            "legacy_jsonl is stored-sidecar compatibility only; current source "
+            "provenance must be tvi_canonical_db or generic_jsonl"
+        )
     raise ValueError(f"unsupported checkpoint source kind: {kind!r}")
+
+
+def stored_source_identity(
+    stored_provenance: dict[str, Any], current_identity: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize an existing sidecar identity against validated current identity.
+
+    A stored ``legacy_jsonl`` sidecar is equivalent to ``generic_jsonl`` only
+    when all four generic identity fields exactly match the current source.
+    """
+    if stored_provenance.get("source_kind") != LEGACY_GENERIC_SOURCE_KIND:
+        return source_identity(stored_provenance)
+
+    legacy_fields = {
+        "path": stored_provenance.get("path"),
+        "sha256": stored_provenance.get("sha256"),
+        "text_field": stored_provenance.get("text_field"),
+        "id_field": stored_provenance.get("id_field"),
+    }
+    current_fields = {
+        field: current_identity.get(field)
+        for field in ("path", "sha256", "text_field", "id_field")
+    }
+    if (
+        current_identity.get("source_kind") == GENERIC_SOURCE_KIND
+        and legacy_fields == current_fields
+    ):
+        return dict(current_identity)
+    return {"source_kind": LEGACY_GENERIC_SOURCE_KIND, **legacy_fields}
 
 
 def source_sidecar_path(checkpoint: str) -> str:
@@ -266,6 +309,7 @@ def checkpoint_lock(checkpoint: str, *, exclusive: bool) -> Iterator[None]:
 def _reconcile_source_sidecar_unlocked(
     checkpoint: str,
     provenance: dict[str, Any],
+    current_identity: dict[str, Any],
     *,
     write_if_missing: bool,
 ) -> dict[str, Any]:
@@ -279,14 +323,15 @@ def _reconcile_source_sidecar_unlocked(
                 f"checkpoint source provenance {path!r} is unreadable ({exc}); "
                 "refusing to resume"
             ) from exc
-        existing_identity = _source_identity(existing)
-        current_identity = _source_identity(provenance)
+        existing_identity = stored_source_identity(existing, current_identity)
         if existing_identity != current_identity:
             raise ValueError(
                 f"checkpoint {checkpoint!r} source mismatch: "
                 f"existing={existing_identity}, current={current_identity}; "
-                "refusing to mix generations or queries"
+                "refusing to mix sources, generations, or queries"
             )
+        if existing.get("source_kind") == LEGACY_GENERIC_SOURCE_KIND:
+            return dict(existing, source_kind=GENERIC_SOURCE_KIND)
         return existing
 
     if os.path.exists(checkpoint) and os.path.getsize(checkpoint) > 0:
@@ -329,28 +374,38 @@ def reconcile_source_sidecar(
     lock_held: bool = False,
 ) -> dict[str, Any]:
     """Create/validate provenance while refusing unproven populated checkpoints."""
+    current_identity = source_identity(provenance)
     if lock_held:
         return _reconcile_source_sidecar_unlocked(
-            checkpoint, provenance, write_if_missing=write_if_missing
+            checkpoint,
+            provenance,
+            current_identity,
+            write_if_missing=write_if_missing,
         )
     with checkpoint_lock(checkpoint, exclusive=True):
         return _reconcile_source_sidecar_unlocked(
-            checkpoint, provenance, write_if_missing=write_if_missing
+            checkpoint,
+            provenance,
+            current_identity,
+            write_if_missing=write_if_missing,
         )
 
 
 def source_summary(provenance: dict[str, Any]) -> str:
-    if provenance["source_kind"] == "tvi_canonical_db":
+    kind = source_identity(provenance)["source_kind"]
+    if kind == CANONICAL_SOURCE_KIND:
         keys = ",".join(provenance["normalized_input_keys"])
         return (
-            f"source_kind=tvi_canonical_db generation_id={provenance['generation_id']} "
+            f"source_kind={CANONICAL_SOURCE_KIND} generation_id={provenance['generation_id']} "
             f"logical_digest_sha256={provenance['logical_digest_sha256']} "
             f"input_keys={keys}"
         )
-    return (
-        f"source_kind=legacy_jsonl path={provenance['path']} "
-        f"sha256={provenance['sha256']}"
-    )
+    if kind == GENERIC_SOURCE_KIND:
+        return (
+            f"source_kind={GENERIC_SOURCE_KIND} path={provenance['path']} "
+            f"sha256={provenance['sha256']}"
+        )
+    raise ValueError(f"unsupported checkpoint source kind: {kind!r}")
 
 
 def _make_adapter(backend: str, model: str | None, base_url: str | None):

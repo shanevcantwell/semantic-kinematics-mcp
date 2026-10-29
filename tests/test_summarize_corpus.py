@@ -148,6 +148,30 @@ def test_build_report_derives_expected_counts(tmp_path):
 
     assert report.model_name == "test-model"
     assert report.dim == 3
+    assert report.source_provenance["source_kind"] == "generic_jsonl"
+
+
+def test_build_report_accepts_matching_legacy_jsonl_source_sidecar(tmp_path):
+    corpus = tmp_path / "corpus.jsonl"
+    _write_jsonl(corpus, [{"chunk_id": "a", "text": "alpha"}])
+    source = embed_corpus.load_corpus_source(corpus=str(corpus))
+    checkpoint = tmp_path / "ckpt.jsonl"
+    _write_jsonl(checkpoint, [{"chunk_id": "a", "embedding": [0.1, 0.2]}])
+    checkpoint.with_name(checkpoint.name + ".meta.json").write_text(
+        json.dumps({"model_name": "test-model", "dimensions": 2}), encoding="utf-8"
+    )
+    checkpoint.with_name(checkpoint.name + ".source.json").write_text(
+        json.dumps(dict(source.provenance, source_kind="legacy_jsonl")), encoding="utf-8"
+    )
+
+    report = _build_report(
+        tmp_path,
+        StoreSpec(name="test-store", corpus=str(corpus), checkpoint=str(checkpoint)),
+    )
+
+    assert report.checkpoint_source_bound is True
+    assert report.checkpoint_source_binding.startswith("validated ")
+    assert "explicit generic JSONL" in _render([report])
 
 
 def test_build_report_reads_meta_sidecar(tmp_path):

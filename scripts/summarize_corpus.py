@@ -41,7 +41,9 @@ if _REPO_ROOT not in sys.path:
 from scripts.embed_corpus import (
     DEFAULT_EXECUTABLE,
     load_corpus_source,
+    source_identity,
     source_sidecar_path,
+    stored_source_identity,
 )
 from semantic_kinematics.embeddings.bulk import is_valid_embedding_record
 
@@ -170,31 +172,9 @@ def _read_metadata_sidecar(checkpoint_path: Path) -> tuple[str, int | None, str]
     return model_name, dimensions, "authoritative .meta.json"
 
 
-def _report_source_identity(provenance: dict[str, Any]) -> dict[str, Any]:
-    """Return the source fields that bind a checkpoint without mutating it."""
-    source_kind = provenance.get("source_kind")
-    if source_kind == "tvi_canonical_db":
-        query = provenance.get("query")
-        if not isinstance(query, dict):
-            raise ValueError("canonical source provenance has no query identity")
-        return {
-            "source_kind": source_kind,
-            "generation_id": provenance.get("generation_id"),
-            "query_fingerprint_sha256": query.get("query_fingerprint_sha256"),
-        }
-    if source_kind == "legacy_jsonl":
-        return {
-            "source_kind": source_kind,
-            "path": provenance.get("path"),
-            "sha256": provenance.get("sha256"),
-            "text_field": provenance.get("text_field"),
-            "id_field": provenance.get("id_field"),
-        }
-    raise ValueError(f"unsupported checkpoint source kind: {source_kind!r}")
-
-
 def _checkpoint_source_binding(checkpoint_path: Path, source_provenance: dict[str, Any]) -> str:
     """Validate an existing source sidecar, or label a legacy checkpoint unbound."""
+    current_identity = source_identity(source_provenance)
     sidecar = Path(source_sidecar_path(str(checkpoint_path)))
     if not sidecar.is_file():
         return "legacy-unbound: no .source.json; no generation/query production claim"
@@ -202,7 +182,7 @@ def _checkpoint_source_binding(checkpoint_path: Path, source_provenance: dict[st
         existing = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"checkpoint source provenance {sidecar!s} is unreadable: {exc}") from exc
-    if _report_source_identity(existing) != _report_source_identity(source_provenance):
+    if stored_source_identity(existing, current_identity) != current_identity:
         raise ValueError(
             f"checkpoint {checkpoint_path!s} source identity does not match the reported source"
         )
