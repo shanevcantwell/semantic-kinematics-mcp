@@ -127,11 +127,11 @@ def test_main_lmstudio_model_env_fallback(tmp_path, monkeypatch):
             "load_corpus_source",
             lambda **kwargs: ec.CorpusSource(
                 [("hi", "1")],
-                {"source_kind": "legacy_jsonl", "path": "/tmp/corpus", "sha256": "1" * 64},
+                {"source_kind": "generic_jsonl", "path": "/tmp/corpus", "sha256": "1" * 64},
             ),
         )
         monkeypatch.setattr(ec, "reconcile_source_sidecar", lambda *a, **k: None)
-        monkeypatch.setattr(ec, "source_summary", lambda provenance: "source_kind=legacy_jsonl")
+        monkeypatch.setattr(ec, "source_summary", lambda provenance: "source_kind=generic_jsonl")
 
         with pytest.raises(SystemExit):
             ec.main(
@@ -213,6 +213,8 @@ def test_canonical_items_match_jsonl_blank_filter_and_order(tmp_path, monkeypatc
         ("alpha", "a"),
         (" beta ", "b"),
     ]
+    assert canonical_source.provenance["source_kind"] == "tvi_canonical_db"
+    assert jsonl_source.provenance["source_kind"] == "generic_jsonl"
     assert canonical_source.provenance["normalized_input_keys"] == ["base"]
 
 
@@ -281,9 +283,9 @@ def test_source_sidecar_is_atomic_and_refuses_generation_or_query_mismatch(
         ec.reconcile_source_sidecar(str(checkpoint), changed_query)
 
 
-def _legacy_provenance(*, sha256: str = "1" * 64):
+def _generic_provenance(*, sha256: str = "1" * 64):
     return {
-        "source_kind": "legacy_jsonl",
+        "source_kind": "generic_jsonl",
         "path": "/tmp/corpus.jsonl",
         "sha256": sha256,
         "text_field": "text",
@@ -296,7 +298,7 @@ def test_populated_legacy_checkpoint_without_source_sidecar_is_refused(tmp_path)
     checkpoint.write_text('{"chunk_id":"a","embedding":[1]}\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="populated but has no source provenance"):
-        ec.reconcile_source_sidecar(str(checkpoint), _legacy_provenance())
+        ec.reconcile_source_sidecar(str(checkpoint), _generic_provenance())
 
     assert not (tmp_path / "checkpoint.jsonl.source.json").exists()
 
@@ -305,15 +307,91 @@ def test_empty_checkpoint_can_receive_first_source_sidecar(tmp_path):
     checkpoint = tmp_path / "checkpoint.jsonl"
     checkpoint.touch()
 
-    ec.reconcile_source_sidecar(str(checkpoint), _legacy_provenance())
+    ec.reconcile_source_sidecar(str(checkpoint), _generic_provenance())
 
     assert (tmp_path / "checkpoint.jsonl.source.json").is_file()
 
 
+@pytest.mark.parametrize("checkpoint_state", ["absent", "empty"])
+def test_legacy_jsonl_current_source_cannot_create_sidecar(tmp_path, checkpoint_state):
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    if checkpoint_state == "empty":
+        checkpoint.touch()
+    legacy_current = dict(_generic_provenance(), source_kind="legacy_jsonl")
+
+    with pytest.raises(ValueError, match="stored-sidecar compatibility only"):
+        ec.reconcile_source_sidecar(str(checkpoint), legacy_current)
+
+    assert not (tmp_path / "checkpoint.jsonl.source.json").exists()
+    assert not (tmp_path / "checkpoint.jsonl.source.json.lock").exists()
+
+
+def test_source_summary_rejects_legacy_jsonl_current_provenance():
+    legacy_current = dict(_generic_provenance(), source_kind="legacy_jsonl")
+
+    with pytest.raises(ValueError, match="stored-sidecar compatibility only"):
+        ec.source_summary(legacy_current)
+
+
+def test_populated_checkpoint_accepts_matching_legacy_jsonl_sidecar(tmp_path):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text('{"chunk_id":"a","text":"alpha"}\n', encoding="utf-8")
+    source = ec.load_corpus_source(corpus=str(corpus))
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    checkpoint.write_text('{"chunk_id":"a","embedding":[1]}\n', encoding="utf-8")
+    sidecar = tmp_path / "checkpoint.jsonl.source.json"
+    legacy_provenance = dict(source.provenance, source_kind="legacy_jsonl")
+    sidecar.write_text(json.dumps(legacy_provenance), encoding="utf-8")
+
+    reconciled = ec.reconcile_source_sidecar(str(checkpoint), source.provenance)
+
+    assert reconciled["source_kind"] == "generic_jsonl"
+    assert json.loads(sidecar.read_text(encoding="utf-8")) == legacy_provenance
+    assert ec.source_identity(reconciled) == ec.source_identity(source.provenance)
+
+
+def test_legacy_jsonl_current_source_is_rejected_before_sidecar_comparison(tmp_path):
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    sidecar = tmp_path / "checkpoint.jsonl.source.json"
+    legacy_current = dict(_generic_provenance(), source_kind="legacy_jsonl")
+    sidecar.write_text(json.dumps(legacy_current), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stored-sidecar compatibility only"):
+        ec.reconcile_source_sidecar(str(checkpoint), legacy_current)
+
+    assert json.loads(sidecar.read_text(encoding="utf-8")) == legacy_current
+
+
+@pytest.mark.parametrize(
+    ("field", "mismatched_value"),
+    [
+        ("path", "/tmp/different-corpus.jsonl"),
+        ("sha256", "0" * 64),
+        ("text_field", "body"),
+        ("id_field", "id"),
+    ],
+)
+def test_legacy_jsonl_sidecar_refuses_generic_identity_mismatch(
+    tmp_path, field, mismatched_value
+):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text('{"chunk_id":"a","text":"alpha"}\n', encoding="utf-8")
+    source = ec.load_corpus_source(corpus=str(corpus))
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    checkpoint.write_text('{"chunk_id":"a","embedding":[1]}\n', encoding="utf-8")
+    sidecar = tmp_path / "checkpoint.jsonl.source.json"
+    legacy_provenance = dict(source.provenance, source_kind="legacy_jsonl")
+    legacy_provenance[field] = mismatched_value
+    sidecar.write_text(json.dumps(legacy_provenance), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source mismatch"):
+        ec.reconcile_source_sidecar(str(checkpoint), source.provenance)
+
+
 def test_conflicting_sidecar_writer_waits_for_run_lock_then_refuses(tmp_path):
     checkpoint = tmp_path / "checkpoint.jsonl"
-    first = _legacy_provenance(sha256="1" * 64)
-    second = _legacy_provenance(sha256="2" * 64)
+    first = _generic_provenance(sha256="1" * 64)
+    second = _generic_provenance(sha256="2" * 64)
     started = threading.Event()
     finished = threading.Event()
     errors = []
@@ -404,6 +482,7 @@ def test_generic_jsonl_items_and_hash_come_from_one_open_stream(tmp_path, monkey
     source = ec.load_corpus_source(corpus=str(corpus))
 
     assert source.items == [("alpha", "a")]
+    assert source.provenance["source_kind"] == "generic_jsonl"
     assert source.provenance["sha256"] == hashlib.sha256(raw).hexdigest()
     assert source_opens == 1
 

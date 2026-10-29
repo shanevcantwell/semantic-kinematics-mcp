@@ -259,6 +259,24 @@ def test_duplicate_source_ids_are_refused(tmp_path):
         compute_status(str(corpus), str(tmp_path / "checkpoint.jsonl"))
 
 
+def test_status_accepts_matching_legacy_jsonl_source_sidecar(tmp_path):
+    corpus = tmp_path / "corpus.jsonl"
+    _write_jsonl(corpus, [{"chunk_id": "a", "text": "alpha"}])
+    source = embed_corpus.load_corpus_source(corpus=str(corpus))
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    _write_jsonl(checkpoint, [{"chunk_id": "a", "embedding": [0.5]}])
+    checkpoint.with_name(checkpoint.name + ".meta.json").write_text(
+        json.dumps({"model_name": "test-model", "dimensions": 1}),
+        encoding="utf-8",
+    )
+    checkpoint.with_name(checkpoint.name + ".source.json").write_text(
+        json.dumps(dict(source.provenance, source_kind="legacy_jsonl")),
+        encoding="utf-8",
+    )
+
+    assert compute_status(str(corpus), str(checkpoint)) == (1, 0, 0, 1)
+
+
 def test_status_refuses_checkpoint_source_mismatch(tmp_path):
     corpus = tmp_path / "corpus.jsonl"
     _write_jsonl(corpus, [{"chunk_id": "a", "text": "alpha"}])

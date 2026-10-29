@@ -27,7 +27,7 @@ def _fake_python(tmp_path: Path) -> tuple[Path, Path, Path]:
         "        if '--corpus-db' in args:\n"
         "            print('source_kind=tvi_canonical_db generation_id=tvi-generation-v1:sha256:' + '1' * 64 + ' logical_digest_sha256=' + '2' * 64 + ' input_keys=base,delta')\n"
         "        else:\n"
-        "            print('source_kind=legacy_jsonl path=/tmp/generic.jsonl sha256=' + '3' * 64)\n"
+        "            print('source_kind=generic_jsonl path=/tmp/generic.jsonl sha256=' + '3' * 64)\n"
         "    elif pathlib.Path(os.environ['FAKE_STATE']).exists()"
         " and not os.environ.get('FAKE_INCOMPLETE'):\n"
         "        print('1 0 0 1')\n"
@@ -123,7 +123,7 @@ def test_wrapper_retains_explicit_generic_corpus_mode(tmp_path):
             assert "--corpus-db" not in call
             assert "--input-key" not in call
 
-    assert "source_kind=legacy_jsonl" in log
+    assert "source_kind=generic_jsonl" in log
     assert "generation_id=" not in log
 
 
