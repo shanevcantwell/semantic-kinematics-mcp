@@ -7,50 +7,76 @@
 > python scripts/summarize_corpus.py
 > ```
 >
-> Every number below is derived from the corpus + checkpoint + sidecar
-> ground truth at generation time via `scripts/embed_status.compute_status`
-> — this file is a snapshot, not a source of truth in itself.
+> TVI text totals and IDs come from a verified canonical query. Vector
+> ID coverage comes from checkpoint snapshots; completion is claimed only
+> when a matching source sidecar binds the checkpoint. This file is a snapshot.
 
 ## Overview
 
-| Store | Model | Dim | Done | Failed | Pending | Total | Completion% | Checkpoint mtime (UTC) |
-|-------|-------|-----|------|--------|---------|-------|-------------|------------------------|
-| embgemma-300m-768 | (MISSING SIDECAR — tvi#37) | 768 | 87004 | 0 | 0 | 87004 | 100.00% | 2026-06-27T06:00:56.819822+00:00 |
-| nvembed-v2-4096 | NVEmbed:nvidia/NV-Embed-v2 | 4096 | 86748 | 256 | 256 | 87004 | 99.71% | 2026-07-03T07:50:51.711658+00:00 |
+| Store | Queried canonical generation | Checkpoint generation binding | Model | Dim | Covered IDs | Failed | Uncovered | Queried total | ID coverage | Checkpoint mtime (UTC) |
+|-------|------------------------------|-------------------------------|-------|-----|------------:|-------:|----------:|--------------:|------------:|------------------------|
+| embgemma-300m-768 | tvi-generation-v1:sha256:5e3cae0cf5d8ecd5a91608301fed6d7bee5c5cd717d0cf8c23c8b886a0e30be3 | unbound | (MISSING SIDECAR — tvi#37) | 768 | 87004 | 0 | 0 | 87004 | 100.00% | 2026-06-27T06:00:56.819822+00:00 |
+| nvembed-v2-4096 | tvi-generation-v1:sha256:5e3cae0cf5d8ecd5a91608301fed6d7bee5c5cd717d0cf8c23c8b886a0e30be3 | unbound | NVEmbed:nvidia/NV-Embed-v2 | 4096 | 86748 | 256 | 256 | 87004 | 99.71% | 2026-07-03T07:50:51.711658+00:00 |
 
 ## embgemma-300m-768
 
-- **Corpus**: `../thought-vault-integration/output/vectors/chunks.jsonl`
-- **Checkpoint**: `../thought-vault-integration/output/vectors/embed_checkpoint.jsonl`
+- **Text/ID source**: verified TVI canonical query
+- **Canonical DB**: `/home/node/worktrees/tvi-canonical-query-door/output/canonical/corpus.db`
+- **Query executable**: `/tmp/tvi-main-cli-smoke-venv/bin/tvi-canonical-corpus`
+- **Trusted canonical root**: `/home/node/worktrees/tvi-canonical-query-door/output/canonical`
+- **Canonical input keys**: `base`
+- **Canonical generation ID**: `tvi-generation-v1:sha256:5e3cae0cf5d8ecd5a91608301fed6d7bee5c5cd717d0cf8c23c8b886a0e30be3`
+- **Database SHA-256**: `1be54c9c9af38defa75525220bbc8177440a5a508aef368fc13dfdcc22818f17`
+- **Logical digest SHA-256**: `161e1a8d643b9228e40a1c7b1233fd98f6822994cac101e077bc134e65a9c380`
+- **Verified query**: `iter_legacy_chunks` / `whole_corpus_v1` / fingerprint `43ae975f2213c9473603ce69589fee4d3d97d4e80e31bd3c3ed463dc4e86f78e`
+- **Verified open**: `true`
+- **Checkpoint (vector state)**: `/home/node/github/shanevcantwell/thought-vault-integration/output/vectors/embed_checkpoint.jsonl`
+- **Checkpoint source binding**: legacy-unbound: no .source.json; no generation/query production claim
+- **Checkpoint generation binding**: unbound
+- **Checkpoint metadata**: legacy checkpoint: dimension inferred in snapshot; model identity not authoritative
+- **Checkpoint SHA-256**: `fb75d130e732ec6e7b3b919acd50b6600a2821920c8971ab01edc88cbaa35305`
 - **Model**: (MISSING SIDECAR — tvi#37)
 - **Dimensions**: 768
 - **Checkpoint size**: 1.4 GB (1,500,112,423 bytes)
 - **Checkpoint mtime**: 2026-06-27T06:00:56.819822+00:00 (UTC)
 - **Raw checkpoint lines**: 87,004
-- **Distinct chunk_ids**: 87,004
+- **Distinct checkpoint chunk_ids**: 87,004
 - **Duplicate/retry lines** (raw − distinct): 0
-- **Done**: 87,004
+- **Checkpoint-covered source IDs**: 87,004
 - **Failed (residual, not superseded)**: 0
-- **Pending**: 0
-- **Total embeddable items in corpus**: 87,004
-- **Completion**: 100.00%
-- **Scan wall-time**: 21.80s
+- **Uncovered source IDs**: 0
+- **Total queried canonical embeddable items**: 87,004
+- **Checkpoint ID coverage against queried generation**: 100.00%
+- **Scan wall-time**: 31.56s
 
 ## nvembed-v2-4096
 
-- **Corpus**: `../thought-vault-integration/output/vectors/chunks.jsonl`
-- **Checkpoint**: `../thought-vault-integration/output/thought-vault-integration-data/nv4096/corpus_4096.jsonl`
+- **Text/ID source**: verified TVI canonical query
+- **Canonical DB**: `/home/node/worktrees/tvi-canonical-query-door/output/canonical/corpus.db`
+- **Query executable**: `/tmp/tvi-main-cli-smoke-venv/bin/tvi-canonical-corpus`
+- **Trusted canonical root**: `/home/node/worktrees/tvi-canonical-query-door/output/canonical`
+- **Canonical input keys**: `base`
+- **Canonical generation ID**: `tvi-generation-v1:sha256:5e3cae0cf5d8ecd5a91608301fed6d7bee5c5cd717d0cf8c23c8b886a0e30be3`
+- **Database SHA-256**: `1be54c9c9af38defa75525220bbc8177440a5a508aef368fc13dfdcc22818f17`
+- **Logical digest SHA-256**: `161e1a8d643b9228e40a1c7b1233fd98f6822994cac101e077bc134e65a9c380`
+- **Verified query**: `iter_legacy_chunks` / `whole_corpus_v1` / fingerprint `43ae975f2213c9473603ce69589fee4d3d97d4e80e31bd3c3ed463dc4e86f78e`
+- **Verified open**: `true`
+- **Checkpoint (vector state)**: `/mnt/storage/thought-vault-integration-data/vectors/nv4096/corpus_4096.jsonl`
+- **Checkpoint source binding**: legacy-unbound: no .source.json; no generation/query production claim
+- **Checkpoint generation binding**: unbound
+- **Checkpoint metadata**: authoritative .meta.json
+- **Checkpoint SHA-256**: `e87ec2b2c139f53d64c6fb00d18b93da2ec2a7603f8c83546968d0de117fa281`
 - **Model**: NVEmbed:nvidia/NV-Embed-v2
 - **Dimensions**: 4096
 - **Checkpoint size**: 7.7 GB (8,237,726,523 bytes)
 - **Checkpoint mtime**: 2026-07-03T07:50:51.711658+00:00 (UTC)
 - **Raw checkpoint lines**: 98,293
-- **Distinct chunk_ids**: 87,004
+- **Distinct checkpoint chunk_ids**: 87,004
 - **Duplicate/retry lines** (raw − distinct): 11,289
-- **Done**: 86,748
+- **Checkpoint-covered source IDs**: 86,748
 - **Failed (residual, not superseded)**: 256
-- **Pending**: 256
-- **Total embeddable items in corpus**: 87,004
-- **Completion**: 99.71%
-- **Scan wall-time**: 112.93s
+- **Uncovered source IDs**: 256
+- **Total queried canonical embeddable items**: 87,004
+- **Checkpoint ID coverage against queried generation**: 99.71%
+- **Scan wall-time**: 83.70s
 

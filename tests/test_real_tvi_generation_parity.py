@@ -18,16 +18,32 @@ import pytest
 import scripts.build_conditioned_null as conditioned
 import scripts.build_displacement_null as displacement
 import scripts.tvi_canonical_input as canonical
-from scripts import embed_corpus
+from scripts import embed_corpus, smoke_jolt
 
 RUN_ENV = "SK_RUN_REAL_TVI_PARITY"
 TVI_EXECUTABLE = Path(
-    "/home/node/worktrees/tvi-canonical-query-door/.venv/bin/tvi-canonical-corpus"
+    os.environ.get(
+        "TVI_CANONICAL_CORPUS_EXECUTABLE",
+        "/home/node/worktrees/tvi-canonical-query-door/.venv/bin/tvi-canonical-corpus",
+    )
 )
-CORPUS_DB = Path("/home/node/worktrees/tvi-canonical-query-door/output/canonical/corpus.db")
-CANONICAL_ROOT = Path("/home/node/worktrees/tvi-canonical-query-door/output/canonical")
+CORPUS_DB = Path(
+    os.environ.get(
+        "THOUGHT_VAULT_CANONICAL_DB",
+        "/home/node/worktrees/tvi-canonical-query-door/output/canonical/corpus.db",
+    )
+)
+CANONICAL_ROOT = Path(
+    os.environ.get(
+        "THOUGHT_VAULT_CANONICAL_ROOT",
+        "/home/node/worktrees/tvi-canonical-query-door/output/canonical",
+    )
+)
 LEGACY_CHUNKS = Path(
-    "/home/node/github/shanevcantwell/thought-vault-integration/output/vectors/chunks.jsonl"
+    os.environ.get(
+        "SK_REAL_TVI_LEGACY_CHUNKS",
+        "/home/node/github/shanevcantwell/thought-vault-integration/output/vectors/chunks.jsonl",
+    )
 )
 INPUT_KEYS = ("base",)
 SAMPLE_SIZE = 3000
@@ -152,6 +168,38 @@ def test_real_generation_usable_text_sequence_and_sampling_are_identical(
     )
 
 
+def test_real_generation_smoke_jolt_specimen_selection_order_and_count_are_identical() -> None:
+    _require_real_generation()
+    legacy_rows = []
+    with LEGACY_CHUNKS.open(encoding="utf-8") as source:
+        for line in source:
+            row = json.loads(line)
+            if row.get("conversation_id") != smoke_jolt.TARGET_CONVERSATION_ID:
+                continue
+            if row.get("speaker") not in smoke_jolt.SPECIMEN_B_SPEAKERS:
+                continue
+            legacy_rows.append(row)
+
+    legacy_turns = smoke_jolt._ordered_specimen_b_turns(legacy_rows)
+    canonical_turns, provenance = smoke_jolt._load_specimen_b_turns(
+        corpus_db=str(CORPUS_DB),
+        canonical_root=str(CANONICAL_ROOT),
+        executable=str(TVI_EXECUTABLE),
+    )
+
+    assert canonical_turns == legacy_turns
+    assert len(canonical_turns) == 201
+    assert _sequence_sha256(canonical_turns) == (
+        "9ccfe2e83268b858cb27a7298187c43ca606492bf9fda93f26ab06d0950f5f07"
+    )
+    print(
+        f"smoke_jolt: generation_id={provenance.generation_id} "
+        f"turns={len(canonical_turns)} "
+        f"query_fingerprint={provenance.query_fingerprint_sha256} "
+        f"turn_sha256={_sequence_sha256(canonical_turns)}"
+    )
+
+
 def test_real_generation_embedding_chunk_id_text_inputs_are_identical() -> None:
     _require_real_generation()
     canonical_source = embed_corpus.load_corpus_source(
@@ -169,9 +217,7 @@ def test_real_generation_embedding_chunk_id_text_inputs_are_identical() -> None:
         legacy_inputs,
         label="embed_corpus (chunk_id, text) input",
     )
-    canonical_ordered_inputs = [
-        (chunk_id, text) for text, chunk_id in canonical_source.items
-    ]
+    canonical_ordered_inputs = [(chunk_id, text) for text, chunk_id in canonical_source.items]
     print(
         f"embed_corpus: generation_id={canonical_source.provenance['generation_id']} "
         f"inputs={input_count} "

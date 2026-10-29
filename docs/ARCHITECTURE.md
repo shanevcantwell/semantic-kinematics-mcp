@@ -227,7 +227,25 @@ generic/non-TVI JSONL (explicit mode only) ────────────�
                                                                                  └─▶ downstream analysis (re-entered via the MCP contract)
 ```
 
-- **Upstream TVI boundary (sibling repo):** raw conversation logs are parsed by `thought-vault-integration`'s adapters (`claude_export`, `pi_session`, `gemini_*`, …) into a `UnifiedMessage` stream and promoted into its verified canonical database. sk-mcp obtains TVI text and chunk IDs only through the installed external `tvi-canonical-corpus` query CLI; it does not import TVI's Python package or read SQLite directly. Generic JSONL remains available only as an explicit input mode for non-TVI corpora. Checkpoint JSONL is derived vector state, not the TVI corpus boundary.
+- **Upstream TVI boundary (sibling repo):** raw conversation logs are parsed by `thought-vault-integration`'s adapters (`claude_export`, `pi_session`, `gemini_*`, …) into a `UnifiedMessage` stream and promoted into its verified canonical database. Canonical-migrated sk-mcp text/ID consumers use the installed external `tvi-canonical-corpus` query CLI and never fall back to TVI JSONL. Generic JSONL remains available only as an explicit input mode for non-TVI corpora. Checkpoint JSONL is derived vector state, not the TVI corpus boundary.
+
+### ADR-TVI-012 typed exception: direction join reads
+
+`semantic_kinematics/mcp/commands/direction.py` still imports `sqlite3` and opens the ADR-TVI-006/008 **legacy-derived join database** directly, read-only, for `query_rates`, `top_exemplars`, `cross_project`, and `preview_pattern`. This is not canonical-corpus authority and must not be cited as evidence that sk-mcp may query ADR-TVI-012 normalized tables directly.
+
+| Exception field | Binding |
+|-----------------|---------|
+| **Type** | ADR-TVI-012 legacy-derived projection exception (read-only SQLite join access) |
+| **Owned surface** | `semantic_kinematics/mcp/commands/direction.py`, including `open_corpus_db_readonly` and its four callers |
+| **Owner** | semantic-kinematics direction-tool maintainers |
+| **Authority** | ADR-TVI-006/008 derived chunk/vector join only; **not** ADR-TVI-012 canonical identity or normalized-table authority |
+| **Constraints — projection/join surface** | `query_rates`, `top_exemplars`, and `cross_project` are `mode=ro` and manifest/memmap-bound; no writes, no ad-hoc canonical normalized-table joins, and no fallback role for canonical-migrated consumers |
+| **Constraints — regex preview surface** | `preview_pattern` has a separate read-only allowance to iterate legacy-derived `text` for regex preview; it accepts no manifest or memmap and may not be generalized into canonical-corpus authority |
+| **Retirement trigger — projection/join** | TVI publishes the canonical-derived replacement join/projection contract and semantic-kinematics records exact parity for grouping, exemplar text readback, and cross-projection era membership; then the owner migrates the three callers |
+| **Retirement trigger — regex preview** | TVI publishes a contracted canonical-derived regex-preview/text-iteration surface and semantic-kinematics records exact regex-match parity; then the owner migrates `preview_pattern` and removes the final direct SQLite allowance |
+
+Until that trigger fires, the exception remains explicit and owned; it does not weaken the canonical query-door rule for migrated text/ID consumers.
+
 - **BulkEmbedder (`embeddings/bulk.py`):** wraps any `EmbeddingAdapter`; adds windowed, self-describing checkpoint/resume (a sidecar `<checkpoint>.meta.json` records `model_name` + `dimensions`, and resume fails loud on a model/dim mismatch rather than merging incompatible vectors — #16), token-aware batching, sub-chunking with vector averaging, and backoff retries. It streams prep + embed in windows of `prep_window` items (default 256) rather than prepping the whole corpus up front, so a restart re-preps only the not-yet-checkpointed remainder — the entire run (prep included) reconstructs from the checkpoint, not just the embedding step. Driven by `scripts/embed_corpus.py` (see README → *Bulk Embedding a Corpus* for the CLI; backend chosen via `--backend`, not `EMBEDDING_BACKEND`). It is a data-plane application on the shared substrate — it invokes no `mcp/commands/` primitive and crosses no contract boundary. If a bulk job needs analysis results, it re-enters through the MCP contract like any other consumer.
 - **Run wrappers:** `scripts/embed_status.py` reports `done failed pending total` for a (corpus, checkpoint) pair — the truthful completion signal, since `embed_corpus.py` exits 0 even when items are marked `_failed`. `scripts/embed_full_corpus.sh` is the recommended way to run a full corpus: a resumable wrapper that auto-restarts on crash, decides completion from the success count (via `embed_status.py`) rather than the process exit code, and defaults to `nv_embed`-appropriate token budgets (8000/8000).
 - **Downstream:** the vectors feed the axis-alignment **background null** (z-scores are meaningless without one — `scripts/build_axis_null.py` builds it, keyed by `model_name`) and any other analysis.
