@@ -70,6 +70,9 @@ class LMStudioAdapter(EmbeddingAdapter):
 
     @property
     def model_name(self) -> str:
+        if not self._model_observed:
+            # Resolve the served model before callers persist or compare identity.
+            _ = self.dimensions
         identity = f"LMStudio:{self._model_name_str}"
         if self._response_model is not None:
             identity += f" (served:{self._response_model})"

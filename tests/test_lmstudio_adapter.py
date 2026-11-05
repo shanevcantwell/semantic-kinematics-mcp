@@ -1,5 +1,6 @@
 """Unit tests for LMStudioAdapter. HTTP is mocked; no live server contacted."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -32,6 +33,37 @@ def test_embed_batch_orders_results_by_response_index():
     adapter = _embedding_adapter([_reply([1, 0])])
     np.testing.assert_array_equal(adapter.embed_batch(["first", "second"]), [[2, 1], [1, 1]])
     assert "actual-model" in adapter.model_name
+
+
+def test_model_identity_is_resolved_before_first_embedding():
+    adapter = _embedding_adapter([_reply([0], "model-a"), _reply([0], "model-a")])
+    identity = adapter.model_name
+    assert "model-a" in identity
+    adapter.embed("text")
+    assert adapter.model_name == identity
+
+
+def test_model_identity_without_server_model_remains_stable():
+    adapter = _embedding_adapter([_reply([0], None), _reply([0], None)])
+    assert adapter.model_name == "LMStudio:alias"
+    adapter.embed("text")
+    assert adapter.model_name == "LMStudio:alias"
+
+
+def test_model_status_handles_unavailable_server():
+    from semantic_kinematics.mcp.commands.model import model_status
+    from semantic_kinematics.mcp.state_manager import StateManager
+
+    def fail(**kwargs):
+        raise ConnectionError("server unavailable")
+
+    adapter = _embedding_adapter([])
+    adapter._client.embeddings.create = fail
+    manager = StateManager()
+    manager._adapter = adapter
+    result = asyncio.run(model_status(manager, {}))
+    assert result["model_name"] == "unknown (model not loaded)"
+    assert result["dimensions"] == "unknown (model not loaded)"
 
 
 @pytest.mark.parametrize("indices", [[0, 0], [0], [0, 2], [-1, 0], [0, 1.0], [0, True], [0, None]])
