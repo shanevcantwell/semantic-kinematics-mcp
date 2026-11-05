@@ -4,6 +4,7 @@ LM Studio embedding adapter.
 Uses OpenAI-compatible API to connect to LM Studio for GGUF'd embedding models.
 """
 
+from threading import Lock
 from typing import List, Optional
 
 import numpy as np
@@ -53,6 +54,9 @@ class LMStudioAdapter(EmbeddingAdapter):
         self._base_url = base_url
         self._dimensions: Optional[int] = None
         self._client = None
+        self._response_model: str | None = None
+        self._model_observed = False
+        self._model_lock = Lock()
 
     def _get_client(self):
         """Lazy initialization of OpenAI client."""
@@ -66,7 +70,10 @@ class LMStudioAdapter(EmbeddingAdapter):
 
     @property
     def model_name(self) -> str:
-        return f"LMStudio:{self._model_name_str}"
+        identity = f"LMStudio:{self._model_name_str}"
+        if self._response_model is not None:
+            identity += f" (served:{self._response_model})"
+        return identity
 
     @property
     def dimensions(self) -> int:
@@ -205,12 +212,29 @@ class LMStudioAdapter(EmbeddingAdapter):
         Returns:
             Embedding vector as numpy array
         """
-        client = self._get_client()
-        response = client.embeddings.create(
-            model=self._model_name_str,
-            input=text
-        )
-        return np.array(response.data[0].embedding)
+        return self._embed_inputs(text, 1)[0]
+
+    def _embed_inputs(self, inputs: str | list[str], count: int) -> np.ndarray:
+        response = self._get_client().embeddings.create(model=self._model_name_str, input=inputs)
+        ordered = [None] * count
+        for item in response.data:
+            index = getattr(item, "index", None)
+            if type(index) is not int or not 0 <= index < count or ordered[index] is not None:
+                raise ValueError(f"invalid or duplicate embedding response index: {index!r}")
+            ordered[index] = item.embedding
+        if any(item is None for item in ordered):
+            raise ValueError("missing embedding response index")
+
+        model = getattr(response, "model", None)
+        if model is not None and (not isinstance(model, str) or not model):
+            raise ValueError("invalid embedding response model")
+        embeddings = np.array(ordered)
+        with self._model_lock:
+            if self._model_observed and model != self._response_model:
+                raise ValueError("embedding response model changed during the session")
+            self._response_model = model
+            self._model_observed = True
+        return embeddings
 
     def embed_batch(self, texts: List[str]) -> np.ndarray:
         """
@@ -227,12 +251,4 @@ class LMStudioAdapter(EmbeddingAdapter):
         if not texts:
             return np.array([])
 
-        client = self._get_client()
-        response = client.embeddings.create(
-            model=self._model_name_str,
-            input=texts
-        )
-
-        # Response data is in same order as input
-        embeddings = [np.array(item.embedding) for item in response.data]
-        return np.array(embeddings)
+        return self._embed_inputs(texts, len(texts))
