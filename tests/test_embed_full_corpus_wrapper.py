@@ -23,6 +23,13 @@ def _fake_python(tmp_path: Path) -> tuple[Path, Path, Path]:
         "    out.write(json.dumps(args) + '\\n')\n"
         "name = pathlib.Path(args[0]).name\n"
         "if name == 'embed_status.py':\n"
+        "    if '--source-summary' not in args and os.environ.get('FAKE_STATUS_EXIT'):\n"
+        "        count_path = pathlib.Path(os.environ['FAKE_STATUS_COUNT'])\n"
+        "        count = int(count_path.read_text()) if count_path.exists() else 0\n"
+        "        count_path.write_text(str(count + 1))\n"
+        "        failures = int(os.environ.get('FAKE_STATUS_FAILURES', '1'))\n"
+        "        if count < failures:\n"
+        "            raise SystemExit(int(os.environ['FAKE_STATUS_EXIT']))\n"
         "    if '--source-summary' in args:\n"
         "        if '--corpus-db' in args:\n"
         "            print('source_kind=tvi_canonical_db generation_id=tvi-generation-v1:sha256:' + '1' * 64 + ' logical_digest_sha256=' + '2' * 64 + ' input_keys=base,delta')\n"
@@ -63,6 +70,7 @@ def _run_wrapper(
             "PY": str(fake_python),
             "FAKE_CALLS": str(calls_path),
             "FAKE_STATE": str(state),
+            "FAKE_STATUS_COUNT": str(tmp_path / 'status-count'),
             "CKPT": str(checkpoint),
             "LOG": str(log),
             "SLEEP_SECONDS": "0",
@@ -142,3 +150,39 @@ def test_wrapper_incomplete_status_stalls_nonzero_without_done(tmp_path):
     assert "[wrapper] DONE:" not in log
     assert "[wrapper] DONE:" not in stdout
     assert "[wrapper] STOP: no new successes across 3 passes" in log
+
+
+def test_wrapper_integrity_status_failure_never_invokes_embed_child(tmp_path):
+    corpus = tmp_path / "generic.jsonl"
+    corpus.write_text('{"chunk_id":"a","text":"alpha"}\n', encoding="utf-8")
+
+    calls, log, _stdout, returncode = _run_wrapper(
+        tmp_path,
+        expected_returncode=2,
+        CORPUS=str(corpus),
+        FAKE_STATUS_EXIT="2",
+        FAKE_STATUS_FAILURES="999",
+    )
+
+    assert returncode == 2
+    assert not _calls_for(calls, "embed_corpus.py")
+    assert "could not verify source" not in log
+
+
+def test_wrapper_retries_only_transport_status_failures(tmp_path):
+    corpus = tmp_path / "generic.jsonl"
+    corpus.write_text('{"chunk_id":"a","text":"alpha"}\n', encoding="utf-8")
+
+    calls, log, _stdout, returncode = _run_wrapper(
+        tmp_path,
+        CORPUS=str(corpus),
+        FAKE_STATUS_EXIT="3",
+        FAKE_STATUS_FAILURES="2",
+        STATUS_RETRIES="3",
+        STATUS_RETRY_DELAY_SECONDS="0",
+    )
+
+    assert returncode == 0
+    assert len(_calls_for(calls, "embed_corpus.py")) == 1
+    assert "status transport retry 2/3" in log
+    assert "status transport retry 3/3" in log

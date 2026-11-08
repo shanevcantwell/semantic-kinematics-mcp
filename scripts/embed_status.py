@@ -20,52 +20,17 @@ if _REPO_ROOT not in sys.path:
 from scripts.embed_corpus import (
     DEFAULT_EXECUTABLE,
     checkpoint_lock,
+    load_checkpoint_metadata,
     load_corpus_source,
     reconcile_source_sidecar,
     source_summary,
+    validate_source_and_checkpoint,
 )
+from scripts.tvi_canonical_input import CanonicalProtocolError, CanonicalQueryError
 from semantic_kinematics.embeddings.bulk import is_valid_embedding_record
 
-
-def _checkpoint_is_populated(checkpoint: str) -> bool:
-    """Return whether a checkpoint contains any non-whitespace record data."""
-    if not os.path.isfile(checkpoint):
-        return False
-    with open(checkpoint, "r", encoding="utf-8") as checkpoint_file:
-        return any(line.strip() for line in checkpoint_file)
-
-
-def load_checkpoint_metadata(checkpoint: str) -> tuple[str | None, int | None]:
-    """Return authoritative model/dimensions, failing closed when populated.
-
-    An absent or whitespace-only checkpoint has no completed records, so it may
-    legitimately have no metadata. Once any record data exists, the bulk
-    sidecar contract requires a readable JSON object with a non-empty model name
-    and a positive integer dimension.
-    """
-    if not _checkpoint_is_populated(checkpoint):
-        return None, None
-
-    meta_path = checkpoint + ".meta.json"
-    try:
-        with open(meta_path, "r", encoding="utf-8") as meta_file:
-            metadata = json.load(meta_file)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"populated checkpoint metadata {meta_path!r} is missing or unreadable: {exc}"
-        ) from exc
-
-    if not isinstance(metadata, dict):
-        raise ValueError(  # noqa: TRY004 -- public status contract uses ValueError.
-            f"populated checkpoint metadata {meta_path!r} must be a JSON object"
-        )
-    model_name = metadata.get("model_name")
-    dimensions = metadata.get("dimensions")
-    if not isinstance(model_name, str) or not model_name.strip():
-        raise ValueError(f"populated checkpoint metadata {meta_path!r} has invalid model_name")
-    if not isinstance(dimensions, int) or isinstance(dimensions, bool) or dimensions <= 0:
-        raise ValueError(f"populated checkpoint metadata {meta_path!r} has invalid dimensions")
-    return model_name, dimensions
+STATUS_INTEGRITY_EXIT = 2
+STATUS_TRANSPORT_EXIT = 3
 
 
 def compute_status(
@@ -89,24 +54,9 @@ def compute_status(
         id_field=id_field,
         tvi_executable=tvi_executable,
     )
-    source_ids_list = [chunk_id for _text, chunk_id in source.items]
-    source_ids = set(source_ids_list)
-    if len(source_ids) != len(source_ids_list):
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for chunk_id in source_ids_list:
-            if chunk_id in seen:
-                duplicates.add(chunk_id)
-            seen.add(chunk_id)
-        raise ValueError(
-            "source contains duplicate chunk_id values: "
-            + ", ".join(repr(value) for value in sorted(duplicates))
-        )
-    total = len(source_ids)
 
     done: set[str] = set()
     failed: set[str] = set()
-    checkpoint_ids: set[str] = set()
     with checkpoint_lock(checkpoint, exclusive=False):
         reconcile_source_sidecar(
             checkpoint,
@@ -114,6 +64,8 @@ def compute_status(
             write_if_missing=False,
             lock_held=True,
         )
+        source_ids = validate_source_and_checkpoint(source, checkpoint)
+        total = len(source_ids)
         _model_name, expected_dimensions = load_checkpoint_metadata(checkpoint)
         if os.path.exists(checkpoint):
             with open(checkpoint, "r", encoding="utf-8") as f:
@@ -131,7 +83,6 @@ def compute_status(
                     if cid is None:
                         continue
                     cid = str(cid)
-                    checkpoint_ids.add(cid)
                     if cid not in source_ids:
                         continue
                     if expected_dimensions is not None and is_valid_embedding_record(
@@ -141,12 +92,6 @@ def compute_status(
                     elif obj.get("_failed"):
                         failed.add(cid)
 
-    extra_ids = checkpoint_ids - source_ids
-    if extra_ids:
-        raise ValueError(
-            "checkpoint contains chunk_id values absent from the current source: "
-            + ", ".join(repr(value) for value in sorted(extra_ids))
-        )
     failed -= done  # a later success supersedes an earlier _failed marker
     pending = len(source_ids - done)
     return len(done), len(failed), pending, total
@@ -187,23 +132,25 @@ def main(argv: list[str] | None = None) -> None:
     if args.corpus and (args.canonical_root or args.input_keys):
         parser.error("--canonical-root/--input-key require --corpus-db")
 
-    # Summary mode deliberately uses the same loader and sidecar check as status,
-    # so the wrapper cannot log one query identity and count another.
-    if args.source_summary:
-        source = load_corpus_source(
-            corpus=args.corpus,
-            corpus_db=args.corpus_db,
-            canonical_root=args.canonical_root,
-            input_keys=args.input_keys,
-            text_field=args.text_field,
-            id_field=args.id_field,
-            tvi_executable=args.tvi_executable,
-        )
-        reconcile_source_sidecar(args.checkpoint, source.provenance, write_if_missing=False)
-        print(source_summary(source.provenance))
-        return
-
     try:
+        # Summary mode deliberately uses the same loader and sidecar check as
+        # status, so the wrapper cannot log one query identity and count another.
+        if args.source_summary:
+            source = load_corpus_source(
+                corpus=args.corpus,
+                corpus_db=args.corpus_db,
+                canonical_root=args.canonical_root,
+                input_keys=args.input_keys,
+                text_field=args.text_field,
+                id_field=args.id_field,
+                tvi_executable=args.tvi_executable,
+            )
+            reconcile_source_sidecar(
+                args.checkpoint, source.provenance, write_if_missing=False
+            )
+            print(source_summary(source.provenance))
+            return
+
         done, failed, pending, total = compute_status(
             args.corpus,
             args.checkpoint,
@@ -214,8 +161,18 @@ def main(argv: list[str] | None = None) -> None:
             input_keys=args.input_keys,
             tvi_executable=args.tvi_executable,
         )
+    except CanonicalQueryError as exc:
+        parser.exit(
+            STATUS_TRANSPORT_EXIT,
+            f"embed_status: transient source transport failure: {exc}\n",
+        )
+    except CanonicalProtocolError as exc:
+        parser.exit(
+            STATUS_INTEGRITY_EXIT,
+            f"embed_status: source protocol integrity refusal: {exc}\n",
+        )
     except ValueError as exc:
-        parser.error(str(exc))
+        parser.exit(STATUS_INTEGRITY_EXIT, f"embed_status: integrity refusal: {exc}\n")
     print(f"{done} {failed} {pending} {total}")
 
 

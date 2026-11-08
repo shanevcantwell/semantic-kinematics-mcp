@@ -51,6 +51,99 @@ class CorpusSource:
     provenance: dict[str, Any]
 
 
+def _checkpoint_is_populated(checkpoint: str) -> bool:
+    """Return whether a checkpoint contains any non-whitespace record data."""
+    if not os.path.isfile(checkpoint):
+        return False
+    with open(checkpoint, "r", encoding="utf-8") as checkpoint_file:
+        return any(line.strip() for line in checkpoint_file)
+
+
+def load_checkpoint_metadata(checkpoint: str) -> tuple[str | None, int | None]:
+    """Read the model metadata required for a populated checkpoint.
+
+    An empty or absent checkpoint is allowed to have no metadata. Once record
+    data exists, metadata is part of the checkpoint integrity boundary and
+    must be a JSON object with a model name and positive dimension.
+    """
+    if not _checkpoint_is_populated(checkpoint):
+        return None, None
+
+    meta_path = checkpoint + ".meta.json"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as meta_file:
+            metadata = json.load(meta_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"populated checkpoint metadata {meta_path!r} is missing or unreadable: {exc}"
+        ) from exc
+
+    if not isinstance(metadata, dict):
+        raise ValueError(  # noqa: TRY004 -- the public integrity contract uses ValueError.
+            f"populated checkpoint metadata {meta_path!r} must be a JSON object"
+        )
+    model_name = metadata.get("model_name")
+    dimensions = metadata.get("dimensions")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError(f"populated checkpoint metadata {meta_path!r} has invalid model_name")
+    if not isinstance(dimensions, int) or isinstance(dimensions, bool) or dimensions <= 0:
+        raise ValueError(f"populated checkpoint metadata {meta_path!r} has invalid dimensions")
+    return model_name, dimensions
+
+
+def _source_ids(source: CorpusSource) -> set[str]:
+    """Validate source identity uniqueness and return its distinct IDs."""
+    source_ids_list = [chunk_id for _text, chunk_id in source.items]
+    source_ids = set(source_ids_list)
+    if len(source_ids) != len(source_ids_list):
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for chunk_id in source_ids_list:
+            if chunk_id in seen:
+                duplicates.add(chunk_id)
+            seen.add(chunk_id)
+        raise ValueError(
+            "source contains duplicate chunk_id values: "
+            + ", ".join(repr(value) for value in sorted(duplicates))
+        )
+    return source_ids
+
+
+def _checkpoint_ids(checkpoint: str) -> set[str]:
+    """Read IDs from checkpoint records, tolerating corrupt retry lines."""
+    checkpoint_ids: set[str] = set()
+    if not os.path.exists(checkpoint):
+        return checkpoint_ids
+    with open(checkpoint, "r", encoding="utf-8") as checkpoint_file:
+        for line in checkpoint_file:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict) and record.get("chunk_id") is not None:
+                checkpoint_ids.add(str(record["chunk_id"]))
+    return checkpoint_ids
+
+
+def validate_source_and_checkpoint(source: CorpusSource, checkpoint: str) -> set[str]:
+    """Validate source/checkpoint integrity before constructing an adapter."""
+    source_ids = _source_ids(source)
+    if not _checkpoint_is_populated(checkpoint):
+        return source_ids
+
+    load_checkpoint_metadata(checkpoint)
+    extra_ids = _checkpoint_ids(checkpoint) - source_ids
+    if extra_ids:
+        raise ValueError(
+            "checkpoint contains chunk_id values absent from the current source: "
+            + ", ".join(repr(value) for value in sorted(extra_ids))
+        )
+    return source_ids
+
+
 def _stat_identity(stat_result: os.stat_result) -> tuple[int, int, int, int, int]:
     """Return file identity and mutation-sensitive metadata for one read."""
     return (
@@ -489,6 +582,7 @@ def main(argv: list[str] | None = None) -> None:
         reconcile_source_sidecar(
             args.checkpoint, source.provenance, lock_held=True
         )
+        validate_source_and_checkpoint(source, args.checkpoint)
         print(f"[embed_corpus] {source_summary(source.provenance)}", file=sys.stderr)
         print(f"[embed_corpus] loaded {len(source.items)} items", file=sys.stderr)
 

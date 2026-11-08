@@ -13,7 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import embed_corpus
+from scripts import embed_corpus, embed_status
+from scripts import tvi_canonical_input as canonical
 from scripts.embed_status import compute_status
 
 
@@ -298,3 +299,21 @@ def test_status_refuses_checkpoint_source_mismatch(tmp_path):
 
     with pytest.raises(ValueError, match="source mismatch"):
         compute_status(str(corpus), str(checkpoint))
+
+
+def test_status_main_classifies_query_failure_as_bounded_transport_exit(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise canonical.CanonicalQueryError("query transport failed")
+
+    monkeypatch.setattr(embed_status, "load_corpus_source", fail)
+
+    with pytest.raises(SystemExit) as exc_info:
+        embed_status.main(
+            [
+                str(tmp_path / "corpus.jsonl"),
+                "--checkpoint",
+                str(tmp_path / "checkpoint.jsonl"),
+            ]
+        )
+
+    assert exc_info.value.code == embed_status.STATUS_TRANSPORT_EXIT

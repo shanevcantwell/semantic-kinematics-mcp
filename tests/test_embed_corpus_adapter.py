@@ -527,3 +527,148 @@ def test_generic_jsonl_mutation_during_read_is_refused(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="changed while being read"):
         ec.load_corpus_source(corpus=str(corpus))
+
+
+def _main_args(corpus: str, checkpoint: str) -> list[str]:
+    return [
+        corpus,
+        "--checkpoint",
+        checkpoint,
+        "--backend",
+        "sentence_transformers",
+    ]
+
+
+def _seed_checkpoint(corpus, checkpoint, row, *, metadata=None):
+    try:
+        source = ec.load_corpus_source(corpus=str(corpus))
+    except ValueError as exc:
+        if "changed while being read" not in str(exc):
+            raise
+        provenance = _generic_provenance(sha256=hashlib.sha256(corpus.read_bytes()).hexdigest()) | {
+            "path": str(corpus.resolve())
+        }
+        source = ec.CorpusSource([("one", "current")], provenance)
+    ec.reconcile_source_sidecar(str(checkpoint), source.provenance)
+    checkpoint.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    if metadata is not None:
+        checkpoint.with_name(checkpoint.name + ".meta.json").write_text(metadata, encoding="utf-8")
+    return source
+
+
+def test_main_rejects_duplicate_source_ids_before_adapter(tmp_path, monkeypatch):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text(
+        '{"chunk_id":"same","text":"one"}\n'
+        '{"chunk_id":"same","text":"two"}\n',
+        encoding="utf-8",
+    )
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    monkeypatch.setattr(
+        ec,
+        "load_corpus_source",
+        lambda **kwargs: ec.CorpusSource(
+            [("one", "same"), ("two", "same")], _generic_provenance()
+        ),
+    )
+    monkeypatch.setattr(ec, "_make_adapter", lambda *args: pytest.fail("adapter was constructed"))
+
+    with pytest.raises(ValueError, match="duplicate chunk_id"):
+        ec.main(_main_args(str(corpus), str(checkpoint)))
+
+
+def test_main_rejects_stale_checkpoint_ids_before_adapter(tmp_path, monkeypatch):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text('{"chunk_id":"current","text":"one"}\n', encoding="utf-8")
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    source = _seed_checkpoint(
+        corpus,
+        checkpoint,
+        {"chunk_id": "stale", "embedding": [1.0]},
+        metadata=json.dumps({"model_name": "test-model", "dimensions": 1}),
+    )
+    monkeypatch.setattr(
+        ec,
+        "load_corpus_source",
+        lambda **kwargs: ec.CorpusSource([("one", "current")], source.provenance),
+    )
+    monkeypatch.setattr(ec, "_make_adapter", lambda *args: pytest.fail("adapter was constructed"))
+
+    with pytest.raises(ValueError, match="absent from the current source"):
+        ec.main(_main_args(str(corpus), str(checkpoint)))
+
+
+@pytest.mark.parametrize("metadata", [None, "{ not json"])
+def test_main_rejects_missing_or_malformed_metadata_before_adapter(
+    tmp_path, monkeypatch, metadata
+):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text('{"chunk_id":"current","text":"one"}\n', encoding="utf-8")
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    source = _seed_checkpoint(
+        corpus,
+        checkpoint,
+        {"chunk_id": "current", "embedding": [1.0]},
+        metadata=metadata,
+    )
+    monkeypatch.setattr(
+        ec,
+        "load_corpus_source",
+        lambda **kwargs: ec.CorpusSource([("one", "current")], source.provenance),
+    )
+    monkeypatch.setattr(ec, "_make_adapter", lambda *args: pytest.fail("adapter was constructed"))
+
+    with pytest.raises(ValueError, match="metadata"):
+        ec.main(_main_args(str(corpus), str(checkpoint)))
+
+
+def test_main_rejects_source_mismatch_before_adapter(tmp_path, monkeypatch):
+    original = tmp_path / "original.jsonl"
+    original.write_text('{"chunk_id":"same","text":"one"}\n', encoding="utf-8")
+    changed = tmp_path / "changed.jsonl"
+    changed.write_text('{"chunk_id":"same","text":"different"}\n', encoding="utf-8")
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    original_provenance = _generic_provenance(sha256="1" * 64) | {
+        "path": str(original.resolve())
+    }
+    changed_provenance = _generic_provenance(sha256="2" * 64) | {
+        "path": str(changed.resolve())
+    }
+    ec.reconcile_source_sidecar(str(checkpoint), original_provenance)
+    checkpoint.write_text(
+        json.dumps({"chunk_id": "same", "embedding": [1.0]}) + "\n", encoding="utf-8"
+    )
+    checkpoint.with_name(checkpoint.name + ".meta.json").write_text(
+        json.dumps({"model_name": "test-model", "dimensions": 1}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        ec,
+        "load_corpus_source",
+        lambda **kwargs: ec.CorpusSource([("different", "same")], changed_provenance),
+    )
+    monkeypatch.setattr(ec, "_make_adapter", lambda *args: pytest.fail("adapter was constructed"))
+
+    with pytest.raises(ValueError, match="source mismatch"):
+        ec.main(_main_args(str(changed), str(checkpoint)))
+
+
+def test_main_rejects_canonical_query_failure_before_adapter(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise canonical.CanonicalQueryError("query transport failed")
+
+    monkeypatch.setattr(ec, "open_canonical_chunks", fail)
+    monkeypatch.setattr(ec, "_make_adapter", lambda *args: pytest.fail("adapter was constructed"))
+
+    with pytest.raises(canonical.CanonicalQueryError, match="query transport failed"):
+        ec.main(
+            [
+                "--corpus-db",
+                str(tmp_path / "corpus.db"),
+                "--input-key",
+                "base",
+                "--checkpoint",
+                str(tmp_path / "checkpoint.jsonl"),
+                "--backend",
+                "sentence_transformers",
+            ]
+        )
