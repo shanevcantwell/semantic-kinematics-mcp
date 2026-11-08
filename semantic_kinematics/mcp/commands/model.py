@@ -83,13 +83,12 @@ async def model_status(manager: StateManager, args: Dict[str, Any]) -> Dict[str,
 
     if manager._adapter is not None:
         adapter = manager._adapter
+        result["model_name"] = adapter.model_name
         result["is_loaded"] = adapter.is_loaded
         try:
             result["dimensions"] = adapter.dimensions
-            result["model_name"] = adapter.model_name
         except Exception:
             result["dimensions"] = "unknown (model not loaded)"
-            result["model_name"] = "unknown (model not loaded)"
     else:
         result["model_name"] = "not initialized"
         result["is_loaded"] = False

@@ -1,6 +1,5 @@
 """Unit tests for LMStudioAdapter. HTTP is mocked; no live server contacted."""
 
-import asyncio
 import json
 from types import SimpleNamespace
 
@@ -32,38 +31,23 @@ def _reply(indices, model="actual-model"):
 def test_embed_batch_orders_results_by_response_index():
     adapter = _embedding_adapter([_reply([1, 0])])
     np.testing.assert_array_equal(adapter.embed_batch(["first", "second"]), [[2, 1], [1, 1]])
-    assert "actual-model" in adapter.model_name
-
-
-def test_model_identity_is_resolved_before_first_embedding():
-    adapter = _embedding_adapter([_reply([0], "model-a"), _reply([0], "model-a")])
-    identity = adapter.model_name
-    assert "model-a" in identity
-    adapter.embed("text")
-    assert adapter.model_name == identity
-
-
-def test_model_identity_without_server_model_remains_stable():
-    adapter = _embedding_adapter([_reply([0], None), _reply([0], None)])
-    assert adapter.model_name == "LMStudio:alias"
-    adapter.embed("text")
     assert adapter.model_name == "LMStudio:alias"
 
 
-def test_model_status_handles_unavailable_server():
-    from semantic_kinematics.mcp.commands.model import model_status
-    from semantic_kinematics.mcp.state_manager import StateManager
+def test_model_name_retains_request_identity_without_probing():
+    adapter = _embedding_adapter([_reply([0], "served-a"), _reply([0], "served-b")])
+    assert adapter.model_name == "LMStudio:alias"
+    adapter.embed("first")
+    adapter.embed("second")
+    assert adapter.model_name == "LMStudio:alias"
 
-    def fail(**kwargs):
-        raise ConnectionError("server unavailable")
 
-    adapter = _embedding_adapter([])
-    adapter._client.embeddings.create = fail
-    manager = StateManager()
-    manager._adapter = adapter
-    result = asyncio.run(model_status(manager, {}))
-    assert result["model_name"] == "unknown (model not loaded)"
-    assert result["dimensions"] == "unknown (model not loaded)"
+def test_checkpoint_keeps_existing_model_identity(tmp_path):
+    adapter = _embedding_adapter([_reply([0], "served-model")])
+    checkpoint = tmp_path / "checkpoint.jsonl"
+    BulkEmbedder(adapter, checkpoint_path=str(checkpoint)).embed_corpus([])
+    metadata = json.loads((tmp_path / "checkpoint.jsonl.meta.json").read_text())
+    assert metadata == {"model_name": "LMStudio:alias", "dimensions": 2}
 
 
 @pytest.mark.parametrize("indices", [[0, 0], [0], [0, 2], [-1, 0], [0, 1.0], [0, True], [0, None]])
@@ -71,21 +55,6 @@ def test_embed_batch_rejects_invalid_indices(indices):
     adapter = _embedding_adapter([_reply(indices)])
     with pytest.raises(ValueError, match="index"):
         adapter.embed_batch(["first", "second"])
-
-
-def test_rejects_model_change_between_calls():
-    adapter = _embedding_adapter([_reply([0], "model-a"), _reply([0], "model-b")])
-    adapter.embed("first")
-    with pytest.raises(ValueError, match="model"):
-        adapter.embed_batch(["second"])
-
-
-@pytest.mark.parametrize("models", [(None, "model-a"), ("model-a", None)])
-def test_rejects_response_model_appearing_or_disappearing(models):
-    adapter = _embedding_adapter([_reply([0], models[0]), _reply([0], models[1])])
-    adapter.embed("first")
-    with pytest.raises(ValueError, match="model"):
-        adapter.embed("second")
 
 
 def test_single_embedding_rejects_invalid_index():
@@ -119,15 +88,6 @@ def test_http_response_order_is_preserved_by_index():
         http_client=httpx.Client(transport=httpx.MockTransport(respond)),
     )
     np.testing.assert_array_equal(adapter.embed_batch(["first", "second"]), [[2, 1], [1, 1]])
-
-
-def test_checkpoint_records_served_model(tmp_path):
-    adapter = _embedding_adapter([_reply([0], "model-a")])
-    checkpoint = str(tmp_path / "checkpoint.jsonl")
-    bulk = BulkEmbedder(adapter, checkpoint_path=checkpoint)
-    bulk.embed_corpus([])
-    with open(checkpoint + ".meta.json") as metadata:
-        assert "model-a" in json.load(metadata)["model_name"]
 
 
 class _FakeResponse:
